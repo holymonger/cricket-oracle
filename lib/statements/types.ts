@@ -9,8 +9,12 @@ export type Innings = z.infer<typeof InningsSchema>;
 export const SegmentXOversSchema = z.union([z.literal(6), z.literal(10), z.literal(12)]);
 export type SegmentXOvers = z.infer<typeof SegmentXOversSchema>;
 
+export const BattingTeamSchema = z.union([z.literal("A"), z.literal("B")]);
+export type BattingTeam = z.infer<typeof BattingTeamSchema>;
+
 export const MatchStateSchema = z.object({
   innings: InningsSchema,
+  battingTeam: BattingTeamSchema.optional().default("A"),
   runs: z.number().int().min(0),
   wickets: z.number().int().min(0).max(10),
   balls: z.number().int().min(0).max(120),

@@ -40,7 +40,7 @@ model MatchStateSnapshot {
   matchFours    Int?
   matchSixes    Int?
 
-  prediction    Prediction?
+  predictions    Prediction[]
 
   @@index([matchId])
   @@map("match_state_snapshots")
@@ -48,12 +48,12 @@ model MatchStateSnapshot {
 
 model Prediction {
   id            String    @id @default(cuid())
-  snapshotId    String    @unique
+  snapshotId    String
   snapshot      MatchStateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
-  createdAt     DateTime  @default(now())
-  
   modelVersion  String
   winProb       Float
+  createdAt     DateTime  @default(now())
 
+  @@unique([snapshotId, modelVersion])
   @@map("predictions")
 }

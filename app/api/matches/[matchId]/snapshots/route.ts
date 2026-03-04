@@ -8,35 +8,12 @@ import {
 } from "@/lib/auth/adminKey";
 import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
 import type { MatchState } from "@/lib/statements/types";
+import { computeWinProb } from "@/lib/model";
 
 const SnapshotSchema = z.object({
   state: z.object({}).passthrough(),
+  modelVersion: z.union([z.literal("v0"), z.literal("v1")]).optional().default("v1"),
 });
-
-function clamp01(x: number) {
-  return Math.max(0, Math.min(1, x));
-}
-
-// Compute win prob for chase scenario
-function computeWinProb(state: MatchState): number {
-  if (state.innings !== 2 || !state.targetRuns) {
-    return 0.5; // placeholder
-  }
-
-  const ballsRemaining = 120 - state.balls;
-  const runsRemaining = state.targetRuns - state.runs;
-
-  if (runsRemaining <= 0) return 1;
-  if (ballsRemaining <= 0) return 0;
-  if (state.wickets >= 10) return 0;
-
-  const reqRr = (runsRemaining * 6) / ballsRemaining;
-  const curRr = state.balls > 0 ? (state.runs * 6) / state.balls : 0;
-  const wicketsInHand = 10 - state.wickets;
-
-  const x = 0.9 * (curRr - reqRr) + 0.12 * wicketsInHand + 0.004 * ballsRemaining;
-  return clamp01(1 / (1 + Math.exp(-x)));
-}
 
 export async function POST(
   req: Request,
@@ -90,7 +67,10 @@ export async function POST(
     }
 
     const state = parsed.data.state as MatchState;
-    const winProb = computeWinProb(state);
+    const modelVersion = parsed.data.modelVersion as "v0" | "v1";
+
+    // Compute win prob using specified model (defaults to v1)
+    const result = computeWinProb(state, modelVersion);
 
     const snapshot = await prisma.matchStateSnapshot.create({
       data: {
@@ -110,18 +90,21 @@ export async function POST(
       },
     });
 
+    // Store prediction with specified model version
     const prediction = await prisma.prediction.create({
       data: {
         snapshotId: snapshot.id,
-        modelVersion: "v0",
-        winProb,
+        modelVersion,
+        winProb: result.winProb,
       },
     });
 
     return NextResponse.json({
       snapshot,
       prediction,
-      winProb,
+      winProb: result.winProb,
+      modelVersion: result.modelVersion,
+      features: result.features,
     });
   } catch (error) {
     console.error("Error saving snapshot:", error);
@@ -159,6 +142,10 @@ export async function GET(
     }
 
     const { matchId } = await params;
+    
+    // Query parameter for model version filter (defaults to v1)
+    const url = new URL(req.url);
+    const modelVersion = (url.searchParams.get("modelVersion") || "v1") as "v0" | "v1";
 
     const match = await prisma.match.findUnique({
       where: { id: matchId },
@@ -170,14 +157,20 @@ export async function GET(
     const snapshots = await prisma.matchStateSnapshot.findMany({
       where: { matchId },
       orderBy: { createdAt: "asc" },
-      include: { prediction: true },
+      include: { 
+        prediction: {
+          where: { modelVersion }
+        }
+      },
     });
 
     return NextResponse.json({
       match,
+      modelVersion,
       snapshots: snapshots.map((snap: typeof snapshots[0]) => ({
         ...snap,
         winProb: snap.prediction?.winProb ?? 0.5,
+        modelVersion: snap.prediction?.modelVersion ?? modelVersion,
       })),
     });
   } catch (error) {
