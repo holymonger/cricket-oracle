@@ -1,0 +1,59 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Match {
+  id        String    @id @default(cuid())
+  teamA     String
+  teamB     String
+  createdAt DateTime  @default(now())
+
+  snapshots MatchStateSnapshot[]
+
+  @@map("matches")
+}
+
+model MatchStateSnapshot {
+  id            String    @id @default(cuid())
+  matchId       String
+  match         Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  
+  innings       Int
+  runs          Int
+  wickets       Int
+  balls         Int
+  targetRuns    Int?
+  runsAfter6    Int?
+  runsAfter10   Int?
+  runsAfter12   Int?
+  teamFours     Int?
+  teamSixes     Int?
+  matchFours    Int?
+  matchSixes    Int?
+
+  prediction    Prediction?
+
+  @@index([matchId])
+  @@map("match_state_snapshots")
+}
+
+model Prediction {
+  id            String    @id @default(cuid())
+  snapshotId    String    @unique
+  snapshot      MatchStateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  
+  modelVersion  String
+  winProb       Float
+
+  @@map("predictions")
+}
