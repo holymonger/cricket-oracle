@@ -158,7 +158,7 @@ export async function GET(
       where: { matchId },
       orderBy: { createdAt: "asc" },
       include: { 
-        prediction: {
+        predictions: {
           where: { modelVersion }
         }
       },
@@ -169,8 +169,8 @@ export async function GET(
       modelVersion,
       snapshots: snapshots.map((snap: typeof snapshots[0]) => ({
         ...snap,
-        winProb: snap.prediction?.winProb ?? 0.5,
-        modelVersion: snap.prediction?.modelVersion ?? modelVersion,
+        winProb: snap.predictions?.[0]?.winProb ?? 0.5,
+        modelVersion: snap.predictions?.[0]?.modelVersion ?? modelVersion,
       })),
     });
   } catch (error) {

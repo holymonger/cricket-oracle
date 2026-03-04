@@ -64,6 +64,7 @@ export default function MatchPage() {
   const [wickets, setWickets] = useState(2);
   const [balls, setBalls] = useState(54); // 9.0 overs
   const [targetRuns, setTargetRuns] = useState<number>(160);
+  const [battingTeam, setBattingTeam] = useState<"A" | "B">("A");
   const [runsAfter6, setRunsAfter6] = useState<number | null>(null);
   const [runsAfter10, setRunsAfter10] = useState<number | null>(null);
   const [runsAfter12, setRunsAfter12] = useState<number | null>(null);
@@ -134,6 +135,7 @@ export default function MatchPage() {
         if (state.wickets !== undefined) setWickets(state.wickets);
         if (state.balls !== undefined) setBalls(state.balls);
         if (state.targetRuns !== undefined) setTargetRuns(state.targetRuns);
+        if (state.battingTeam !== undefined) setBattingTeam(state.battingTeam);
         if (state.runsAfter6 !== undefined) setRunsAfter6(state.runsAfter6);
         if (state.runsAfter10 !== undefined) setRunsAfter10(state.runsAfter10);
         if (state.runsAfter12 !== undefined) setRunsAfter12(state.runsAfter12);
@@ -187,8 +189,9 @@ export default function MatchPage() {
       wickets,
       balls,
       targetRuns: innings === 2 ? targetRuns : null,
+      battingTeam,
     };
-  }, [innings, runs, wickets, balls, targetRuns]);
+  }, [innings, runs, wickets, balls, targetRuns, battingTeam]);
 
   const payloadWithOptionals = useMemo(() => {
     return {
@@ -200,8 +203,9 @@ export default function MatchPage() {
       teamSixes: teamSixes ?? null,
       matchFours: matchFours ?? null,
       matchSixes: matchSixes ?? null,
+      battingTeam,
     };
-  }, [payload, runsAfter6, runsAfter10, runsAfter12, teamFours, teamSixes, matchFours, matchSixes]);
+  }, [payload, runsAfter6, runsAfter10, runsAfter12, teamFours, teamSixes, matchFours, matchSixes, battingTeam]);
 
   const [result, setResult] = useState<Result | null>(null);
   const [loading, setLoading] = useState(false);
@@ -469,7 +473,7 @@ export default function MatchPage() {
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Match State</h2>
         
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <label className="space-y-1">
             <div className="text-sm">Innings</div>
             <select
@@ -479,6 +483,18 @@ export default function MatchPage() {
             >
               <option value={1}>1st innings</option>
               <option value={2}>2nd innings</option>
+            </select>
+          </label>
+
+          <label className="space-y-1">
+            <div className="text-sm">Batting Team</div>
+            <select
+              className="w-full border rounded p-2"
+              value={battingTeam}
+              onChange={(e) => setBattingTeam(e.target.value as "A" | "B")}
+            >
+              <option value="A">Team A</option>
+              <option value="B">Team B</option>
             </select>
           </label>
 

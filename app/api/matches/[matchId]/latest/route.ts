@@ -38,7 +38,7 @@ export async function GET(
     const snapshot = await prisma.matchStateSnapshot.findFirst({
       where: { matchId },
       orderBy: { createdAt: "desc" },
-      include: { prediction: true },
+      include: { predictions: true },
     });
 
     if (!snapshot) {
@@ -47,8 +47,8 @@ export async function GET(
 
     return NextResponse.json({
       snapshot,
-      prediction: snapshot.prediction,
-      winProb: snapshot.prediction?.winProb ?? 0.5,
+      prediction: snapshot.predictions?.[0],
+      winProb: snapshot.predictions?.[0]?.winProb ?? 0.5,
     });
   } catch (error) {
     console.error("Error fetching latest snapshot:", error);

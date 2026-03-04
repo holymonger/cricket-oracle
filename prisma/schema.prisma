@@ -11,14 +11,92 @@ datasource db {
 }
 
 model Match {
+  id               String    @id @default(cuid())
+  teamA            String
+  teamB            String
+  createdAt        DateTime  @default(now())
+
+  // Cricsheet import fields
+  source           String?   // e.g. "cricsheet"
+  sourceMatchId    String?   // e.g. filename "335982"
+  matchDate        DateTime?
+  venue            String?
+  city             String?
+  teamAName        String?   // store info.teams[0] for mapping
+  teamBName        String?   // store info.teams[1] for mapping
+  winnerTeam       String?   // "A" | "B" | null
+  tossWinnerTeam   String?   // "A" | "B" | null
+  tossDecision     String?   // "bat" | "field"
+
+  snapshots        MatchStateSnapshot[]
+  matchPlayers     MatchPlayer[]
+  ballEvents       BallEvent[]
+
+  @@unique([source, sourceMatchId])
+  @@map("matches")
+}
+
+model Player {
+  id          String    @id @default(cuid())
+  name        String
+  externalId  String?   // e.g. cricsheet registry id
+  createdAt   DateTime  @default(now())
+
+  matchPlayers MatchPlayer[]
+  ballEvents   BallEvent[] @relation("Striker")
+  ballEventsNS BallEvent[] @relation("NonStriker")
+  ballEventsBowler BallEvent[] @relation("Bowler")
+
+  @@unique([externalId])
+  @@map("players")
+}
+
+model MatchPlayer {
   id        String    @id @default(cuid())
-  teamA     String
-  teamB     String
+  matchId   String
+  match     Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  playerId  String
+  player    Player    @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  team      String    // "A" | "B"
   createdAt DateTime  @default(now())
 
-  snapshots MatchStateSnapshot[]
+  @@unique([matchId, playerId])
+  @@index([matchId])
+  @@map("match_players")
+}
 
-  @@map("matches")
+model BallEvent {
+  id                String    @id @default(cuid())
+  matchId           String
+  match             Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  
+  innings           Int       // 1 or 2
+  over              Int       // 0-19
+  ballInOver        Int       // 1-6 (plus extras)
+  legalBallNumber   Int?      // 1-120 per innings; null for illegal deliveries
+  battingTeam       String    // "A" | "B"
+  
+  strikerId         String
+  striker           Player    @relation("Striker", fields: [strikerId], references: [id], onDelete: Restrict)
+  nonStrikerId      String
+  nonStriker        Player    @relation("NonStriker", fields: [nonStrikerId], references: [id], onDelete: Restrict)
+  bowlerId          String
+  bowler            Player    @relation("Bowler", fields: [bowlerId], references: [id], onDelete: Restrict)
+  
+  runsBat           Int
+  runsExtras        Int
+  runsTotal         Int
+  extrasJson        Json?     // store original extras object
+  isWide            Boolean   @default(false)
+  isNoBall          Boolean   @default(false)
+  isWicket          Boolean   @default(false)
+  wicketJson        Json?     // store wickets array
+  
+  createdAt         DateTime  @default(now())
+
+  @@index([matchId, innings, over, ballInOver])
+  @@index([matchId, innings, legalBallNumber])
+  @@map("ball_events")
 }
 
 model MatchStateSnapshot {
