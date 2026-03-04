@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
+import { assertAdminKey } from "@/lib/auth/adminKey";
 
 const CreateMatchSchema = z.object({
   teamA: z.string().min(1),
@@ -9,6 +10,22 @@ const CreateMatchSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    // Validate admin key for write operation
+    try {
+      assertAdminKey(req);
+    } catch (authError) {
+      if (authError instanceof Error && authError.message.includes("ADMIN_KEY environment variable")) {
+        return NextResponse.json(
+          { error: authError.message },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json(
+        { error: authError instanceof Error ? authError.message : "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
     const parsed = CreateMatchSchema.safeParse(body);
 

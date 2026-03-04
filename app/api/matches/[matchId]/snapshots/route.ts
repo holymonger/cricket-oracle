@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
+import { assertAdminKey } from "@/lib/auth/adminKey";
 import type { MatchState } from "@/lib/statements/types";
 
 const SnapshotSchema = z.object({
@@ -37,6 +38,22 @@ export async function POST(
   { params }: { params: Promise<{ matchId: string }> }
 ) {
   try {
+    // Validate admin key for write operation
+    try {
+      assertAdminKey(req);
+    } catch (authError) {
+      if (authError instanceof Error && authError.message.includes("ADMIN_KEY environment variable")) {
+        return NextResponse.json(
+          { error: authError.message },
+          { status: 500 }
+        );
+      }
+      return NextResponse.json(
+        { error: authError instanceof Error ? authError.message : "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
     const { matchId } = await params;
     const body = await req.json();
     const parsed = SnapshotSchema.safeParse(body);

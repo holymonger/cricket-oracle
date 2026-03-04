@@ -20,6 +20,89 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## Admin Key (v0 Auth)
+
+Write operations (creating matches, saving snapshots) are protected by a shared secret admin key. This prevents unauthorized modifications to your match data.
+
+### Protected Endpoints
+
+- `POST /api/matches` - Create a new match
+- `POST /api/matches/[matchId]/snapshots` - Save a match snapshot
+
+### Open Endpoints (No Auth Required)
+
+- `GET /api/matches/[matchId]/snapshots` - Retrieve snapshots
+- `/api/health` - Health check
+- `/api/winprob` - Compute win probability (read-only)
+- `/api/statement-prob` - Parse betting statements (read-only)
+
+### Setting Up Admin Key Locally
+
+1. **Create or update `.env.local`:**
+   ```bash
+   ADMIN_KEY=your-secret-key-here
+   DATABASE_URL=postgresql://...
+   ```
+
+2. **The key will be automatically loaded when you run:**
+   ```bash
+   npm run dev
+   ```
+
+3. **In the UI at `/match`:**
+   - A blue "Admin Key" section appears at the top
+   - Enter your `ADMIN_KEY` value
+   - Click **"Save"** - it stores to localStorage
+   - Status shows as "✓ Saved"
+
+4. **Test create/save operations:**
+   - Create a match
+   - Add snapshots
+   - All requests include the `x-admin-key` header automatically
+
+### Deploying with Admin Key to Vercel
+
+1. **Add ADMIN_KEY to Vercel Environment Variables:**
+   - Go to **Vercel Project Settings** → **Environment Variables**
+   - Name: `ADMIN_KEY`
+   - Value: (same secret key from your `.env.local`)
+   - Select: **Production**, **Preview**, **Development**
+   - Click **"Save"**
+
+2. **Redeploy:**
+   ```bash
+   git add . 
+   git commit -m "Update config"
+   git push origin main
+   # Vercel will auto-redeploy with ADMIN_KEY set
+   ```
+
+3. **Verify:**
+   - Open `/match` page on your deployed app
+   - Enter the same ADMIN_KEY value
+   - Save it and try creating a match
+
+### Error Handling
+
+**401 Unauthorized:** 
+- You entered an invalid key or no key at all
+- Solution: Check the admin key input and resave
+
+**500 Server Error with "ADMIN_KEY environment variable":**
+- Server is misconfigured (ADMIN_KEY not set on deployment)
+- Solution: Add ADMIN_KEY to Vercel Environment Variables and redeploy
+
+**Read endpoints (GET snapshots, /api/health) do not require admin key.**
+
+### Security Notes
+
+- Admin key is stored in browser localStorage (not secure for highly sensitive data)
+- For production, consider:
+  - Using short-lived tokens (JWT)
+  - Implementing proper OAuth or session-based auth
+  - Using HTTPS only (Vercel handles this)
+- Never commit `.env.local` to Git (it's in `.gitignore`)
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

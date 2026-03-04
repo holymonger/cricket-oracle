@@ -76,7 +76,20 @@ export default function MatchPage() {
   const [statementResult, setStatementResult] = useState<StatementResult | null>(null);
   const [statementLoading, setStatementLoading] = useState(false);
 
-  // Load extracted data from query params after applying from upload page
+  // Admin key for write operations
+  const [adminKey, setAdminKey] = useState<string>("");
+  const [adminKeyInput, setAdminKeyInput] = useState<string>("");
+  const [adminKeyError, setAdminKeyError] = useState<string>("");
+  const [adminKeyStatus, setAdminKeyStatus] = useState<"saved" | "missing" | "">("missing");
+
+  // Load admin key from localStorage on mount
+  useEffect(() => {
+    const saved = localStorage.getItem("cricket_oracle_admin_key");
+    if (saved) {
+      setAdminKey(saved);
+      setAdminKeyStatus("saved");
+    }
+  }, []);
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
 
@@ -139,19 +152,29 @@ export default function MatchPage() {
 
   async function createMatch() {
     setMatchCreating(true);
+    setAdminKeyError("");
     try {
+      const headers: HeadersInit = { "content-type": "application/json" };
+      if (adminKey) {
+        headers["x-admin-key"] = adminKey;
+      }
       const res = await fetch("/api/matches", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ teamA, teamB }),
       });
       const data = await res.json();
-      if (data.matchId) {
+      if (res.status === 401) {
+        setAdminKeyError("Unauthorized: Invalid or missing admin key. Please set it in the 'Admin Key' section.");
+      } else if (res.status === 500 && data.error?.includes("ADMIN_KEY")) {
+        setAdminKeyError("Server error: ADMIN_KEY not configured on server. Contact admin.");
+      } else if (data.matchId) {
         setMatchId(data.matchId);
         setSnapshots([]);
       }
     } catch (e) {
       console.error("Failed to create match", e);
+      setAdminKeyError("Network error: " + String(e));
     } finally {
       setMatchCreating(false);
     }
@@ -160,18 +183,28 @@ export default function MatchPage() {
   async function saveSnapshot() {
     if (!matchId) return;
     setSnapshotSaving(true);
+    setAdminKeyError("");
     try {
+      const headers: HeadersInit = { "content-type": "application/json" };
+      if (adminKey) {
+        headers["x-admin-key"] = adminKey;
+      }
       const res = await fetch(`/api/matches/${matchId}/snapshots`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers,
         body: JSON.stringify({ state: payloadWithOptionals }),
       });
       const data = await res.json();
-      if (data.snapshot) {
+      if (res.status === 401) {
+        setAdminKeyError("Unauthorized: Invalid or missing admin key. Please set it in the 'Admin Key' section.");
+      } else if (res.status === 500 && data.error?.includes("ADMIN_KEY")) {
+        setAdminKeyError("Server error: ADMIN_KEY not configured on server. Contact admin.");
+      } else if (data.snapshot) {
         setSnapshots([...snapshots, { snapshot: data.snapshot, winProb: data.winProb }]);
       }
     } catch (e) {
       console.error("Failed to save snapshot", e);
+      setAdminKeyError("Network error: " + String(e));
     } finally {
       setSnapshotSaving(false);
     }
@@ -245,6 +278,56 @@ export default function MatchPage() {
         >
           📸 Upload Scorecard
         </a>
+      </div>
+
+      {/* Admin Key Section */}
+      <div className="bg-blue-50 border border-blue-200 rounded p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="font-semibold text-blue-900">🔑 Admin Key (Write Protection)</h3>
+          <span className={`text-xs px-2 py-1 rounded ${adminKeyStatus === "saved" ? "bg-green-200 text-green-800" : "bg-yellow-200 text-yellow-800"}`}>
+            {adminKeyStatus === "saved" ? "✓ Saved" : "Not set"}
+          </span>
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="password"
+            placeholder="Enter admin key..."
+            value={adminKeyInput}
+            onChange={(e) => setAdminKeyInput(e.target.value)}
+            className="flex-1 border rounded px-3 py-2 text-sm"
+          />
+          <button
+            onClick={() => {
+              if (adminKeyInput.trim()) {
+                setAdminKey(adminKeyInput);
+                localStorage.setItem("cricket_oracle_admin_key", adminKeyInput);
+                setAdminKeyStatus("saved");
+                setAdminKeyInput("");
+                setAdminKeyError("");
+              }
+            }}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => {
+              setAdminKey("");
+              setAdminKeyInput("");
+              localStorage.removeItem("cricket_oracle_admin_key");
+              setAdminKeyStatus("missing");
+              setAdminKeyError("");
+            }}
+            className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded text-sm font-medium"
+          >
+            Clear
+          </button>
+        </div>
+        {adminKeyError && (
+          <div className="bg-red-100 border border-red-300 rounded p-2 text-sm text-red-700">
+            ⚠️ {adminKeyError}
+          </div>
+        )}
       </div>
 
       {/* Match Creation Section */}
