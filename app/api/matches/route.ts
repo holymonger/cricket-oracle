@@ -13,6 +13,7 @@ const CreateMatchSchema = z.object({
   teamB: z.string().min(1),
 });
 
+// GET: List all matches (admin-protected)
 export async function GET(req: Request) {
   try {
     try {
@@ -63,6 +64,7 @@ export async function GET(req: Request) {
   }
 }
 
+// POST: Create a new match (admin-protected)
 export async function POST(req: Request) {
   try {
     try {
