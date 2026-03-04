@@ -13,6 +13,56 @@ const CreateMatchSchema = z.object({
   teamB: z.string().min(1),
 });
 
+export async function GET(req: Request) {
+  try {
+    try {
+      rateLimitOrThrow(req);
+    } catch (rateLimitError) {
+      if (rateLimitError instanceof RateLimitExceededError) {
+        return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+      }
+      throw rateLimitError;
+    }
+
+    // Require admin key to list matches
+    try {
+      assertAdminKey(req);
+    } catch (authError) {
+      if (authError instanceof MissingAdminKeyConfigError) {
+        return NextResponse.json(
+          { error: authError.message },
+          { status: 500 }
+        );
+      }
+      if (authError instanceof UnauthorizedAdminKeyError) {
+        return NextResponse.json({ error: authError.message }, { status: 401 });
+      }
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    const matches = await prisma.match.findMany({
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        teamA: true,
+        teamB: true,
+        createdAt: true,
+      },
+    });
+
+    return NextResponse.json(matches);
+  } catch (error) {
+    console.error("Error fetching matches:", error);
+    return NextResponse.json(
+      { error: "Server error", details: String(error) },
+      { status: 500 }
+    );
+  }
+}
+
 export async function POST(req: Request) {
   try {
     try {

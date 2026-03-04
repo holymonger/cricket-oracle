@@ -90,6 +90,62 @@ export default function MatchPage() {
       setAdminKeyStatus("saved");
     }
   }, []);
+
+  // Load matchId from URL and fetch latest snapshot
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const urlMatchId = searchParams.get("matchId");
+    
+    if (urlMatchId && urlMatchId !== matchId) {
+      setMatchId(urlMatchId);
+      // Load latest snapshot to prefill form
+      loadLatestSnapshot(urlMatchId);
+    }
+  }, []);
+
+  async function loadLatestSnapshot(targetMatchId: string) {
+    try {
+      const headers: HeadersInit = {};
+      if (adminKey) {
+        headers["x-admin-key"] = adminKey;
+      }
+
+      const res = await fetch(`/api/matches/${targetMatchId}/latest`, {
+        method: "GET",
+        headers,
+      });
+
+      if (res.status === 401) {
+        setAdminKeyError("Unauthorized: Invalid or missing admin key. Please set it in the 'Admin Key' section.");
+        return;
+      }
+
+      if (!res.ok) {
+        console.error("Failed to load latest snapshot:", res.status);
+        return;
+      }
+
+      const data = await res.json();
+      if (data.snapshot && data.snapshot.state) {
+        const state = data.snapshot.state;
+        // Prefill form with latest snapshot data
+        if (state.innings !== undefined) setInnings(state.innings);
+        if (state.runs !== undefined) setRuns(state.runs);
+        if (state.wickets !== undefined) setWickets(state.wickets);
+        if (state.balls !== undefined) setBalls(state.balls);
+        if (state.targetRuns !== undefined) setTargetRuns(state.targetRuns);
+        if (state.runsAfter6 !== undefined) setRunsAfter6(state.runsAfter6);
+        if (state.runsAfter10 !== undefined) setRunsAfter10(state.runsAfter10);
+        if (state.runsAfter12 !== undefined) setRunsAfter12(state.runsAfter12);
+        if (state.teamFours !== undefined) setTeamFours(state.teamFours);
+        if (state.teamSixes !== undefined) setTeamSixes(state.teamSixes);
+        if (state.matchFours !== undefined) setMatchFours(state.matchFours);
+        if (state.matchSixes !== undefined) setMatchSixes(state.matchSixes);
+      }
+    } catch (e) {
+      console.error("Failed to load latest snapshot", e);
+    }
+  }
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
 
@@ -171,6 +227,8 @@ export default function MatchPage() {
       } else if (data.matchId) {
         setMatchId(data.matchId);
         setSnapshots([]);
+        // Redirect to this match
+        router.push(`/match?matchId=${data.matchId}`);
       }
     } catch (e) {
       console.error("Failed to create match", e);
@@ -286,12 +344,20 @@ export default function MatchPage() {
     <div className="max-w-4xl mx-auto p-6 space-y-8">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-semibold">Cricket Oracle (v0)</h1>
-        <a
-          href="/match/upload"
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-sm font-medium transition"
-        >
-          📸 Upload Scorecard
-        </a>
+        <div className="flex gap-3">
+          <a
+            href="/matches"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition"
+          >
+            📋 All Matches
+          </a>
+          <a
+            href="/match/upload"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded text-sm font-medium transition"
+          >
+            📸 Upload Scorecard
+          </a>
+        </div>
       </div>
 
       {/* Admin Key Section */}
@@ -391,6 +457,7 @@ export default function MatchPage() {
               onClick={() => {
                 setMatchId(null);
                 setSnapshots([]);
+                router.push("/match");
               }}
               className="mt-3 text-sm text-purple-600 hover:underline"
             >
