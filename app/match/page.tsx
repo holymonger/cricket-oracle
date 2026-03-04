@@ -212,10 +212,23 @@ export default function MatchPage() {
 
   async function loadSnapshots() {
     if (!matchId) return;
+    setAdminKeyError("");
     try {
-      const res = await fetch(`/api/matches/${matchId}/snapshots`);
+      const headers: HeadersInit = {};
+      if (adminKey) {
+        headers["x-admin-key"] = adminKey;
+      }
+
+      const res = await fetch(`/api/matches/${matchId}/snapshots`, {
+        method: "GET",
+        headers,
+      });
       const data = await res.json();
-      if (data.snapshots) {
+      if (res.status === 401) {
+        setAdminKeyError("Unauthorized: Invalid or missing admin key. Please set it in the 'Admin Key' section.");
+      } else if (res.status === 500 && data.error?.includes("ADMIN_KEY")) {
+        setAdminKeyError("Server error: ADMIN_KEY not configured on server. Contact admin.");
+      } else if (data.snapshots) {
         // Re-compute winProbs for display
         const withWinProbs = data.snapshots.map((snap: MatchSnapshot, idx: number) => ({
           snapshot: snap,
@@ -225,6 +238,7 @@ export default function MatchPage() {
       }
     } catch (e) {
       console.error("Failed to load snapshots", e);
+      setAdminKeyError("Failed to load snapshots. Please verify your admin key and try again.");
     }
   }
 

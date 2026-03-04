@@ -22,19 +22,21 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 ## Admin Key (v0 Auth)
 
-Write operations (creating matches, saving snapshots) are protected by a shared secret admin key. This prevents unauthorized modifications to your match data.
+Match endpoints are protected by a shared secret admin key. This prevents unauthorized reads/writes of match timelines.
 
 ### Protected Endpoints
 
 - `POST /api/matches` - Create a new match
 - `POST /api/matches/[matchId]/snapshots` - Save a match snapshot
+- `GET /api/matches/[matchId]/snapshots` - Retrieve snapshots timeline
+- `GET /api/matches/[matchId]/latest` - Retrieve latest snapshot
 
 ### Open Endpoints (No Auth Required)
 
-- `GET /api/matches/[matchId]/snapshots` - Retrieve snapshots
 - `/api/health` - Health check
 - `/api/winprob` - Compute win probability (read-only)
 - `/api/statement-prob` - Parse betting statements (read-only)
+- `/api/extract-scorecard` - OCR extraction endpoint
 
 ### Setting Up Admin Key Locally
 
@@ -92,7 +94,27 @@ Write operations (creating matches, saving snapshots) are protected by a shared 
 - Server is misconfigured (ADMIN_KEY not set on deployment)
 - Solution: Add ADMIN_KEY to Vercel Environment Variables and redeploy
 
-**Read endpoints (GET snapshots, /api/health) do not require admin key.**
+**`/api/health` remains public and does not require admin key.**
+
+## Rate Limit (v0)
+
+All match-related APIs now use a simple in-memory token bucket limiter:
+
+- Limit: **60 requests per minute per IP**
+- IP source: first IP from `x-forwarded-for`, fallback `"unknown"`
+- Exceeded limit response: **HTTP 429** with JSON error
+
+### Rate-limited Endpoints
+
+- `POST /api/matches`
+- `POST /api/matches/[matchId]/snapshots`
+- `GET /api/matches/[matchId]/snapshots`
+- `GET /api/matches/[matchId]/latest`
+- `POST /api/statement-prob`
+- `POST /api/winprob`
+- `POST /api/extract-scorecard`
+
+Because this limiter is in-memory (v0), counters reset when server instances restart.
 
 ### Security Notes
 

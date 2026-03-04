@@ -3,6 +3,7 @@ import { z } from "zod";
 import { parseStatement } from "@/lib/statements/parse";
 import { computeStatementProbability } from "@/lib/statements/compute";
 import type { MatchState } from "@/lib/statements/types";
+import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
 
 const RequestSchema = z.object({
   statementText: z.string().min(1),
@@ -11,6 +12,15 @@ const RequestSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    try {
+      rateLimitOrThrow(req);
+    } catch (rateLimitError) {
+      if (rateLimitError instanceof RateLimitExceededError) {
+        return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+      }
+      throw rateLimitError;
+    }
+
     const body = await req.json();
     const parsed = RequestSchema.safeParse(body);
 

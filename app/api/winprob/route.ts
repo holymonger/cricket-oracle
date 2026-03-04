@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
 
 const InputSchema = z.object({
   innings: z.union([z.literal(1), z.literal(2)]),
@@ -41,6 +42,15 @@ function winProbV0(input: z.infer<typeof InputSchema>) {
 }
 
 export async function POST(req: Request) {
+  try {
+    rateLimitOrThrow(req);
+  } catch (rateLimitError) {
+    if (rateLimitError instanceof RateLimitExceededError) {
+      return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+    }
+    return NextResponse.json({ error: "Rate limiter error" }, { status: 500 });
+  }
+
   const body = await req.json();
   const parsed = InputSchema.safeParse(body);
 

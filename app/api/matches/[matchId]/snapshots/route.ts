@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/db/prisma";
-import { assertAdminKey } from "@/lib/auth/adminKey";
+import {
+  assertAdminKey,
+  MissingAdminKeyConfigError,
+  UnauthorizedAdminKeyError,
+} from "@/lib/auth/adminKey";
+import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
 import type { MatchState } from "@/lib/statements/types";
 
 const SnapshotSchema = z.object({
@@ -38,18 +43,30 @@ export async function POST(
   { params }: { params: Promise<{ matchId: string }> }
 ) {
   try {
+    try {
+      rateLimitOrThrow(req);
+    } catch (rateLimitError) {
+      if (rateLimitError instanceof RateLimitExceededError) {
+        return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+      }
+      throw rateLimitError;
+    }
+
     // Validate admin key for write operation
     try {
       assertAdminKey(req);
     } catch (authError) {
-      if (authError instanceof Error && authError.message.includes("ADMIN_KEY environment variable")) {
+      if (authError instanceof MissingAdminKeyConfigError) {
         return NextResponse.json(
           { error: authError.message },
           { status: 500 }
         );
       }
+      if (authError instanceof UnauthorizedAdminKeyError) {
+        return NextResponse.json({ error: authError.message }, { status: 401 });
+      }
       return NextResponse.json(
-        { error: authError instanceof Error ? authError.message : "Unauthorized" },
+        { error: "Unauthorized" },
         { status: 401 }
       );
     }
@@ -116,10 +133,31 @@ export async function POST(
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ matchId: string }> }
 ) {
   try {
+    try {
+      rateLimitOrThrow(req);
+    } catch (rateLimitError) {
+      if (rateLimitError instanceof RateLimitExceededError) {
+        return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+      }
+      throw rateLimitError;
+    }
+
+    try {
+      assertAdminKey(req);
+    } catch (authError) {
+      if (authError instanceof MissingAdminKeyConfigError) {
+        return NextResponse.json({ error: authError.message }, { status: 500 });
+      }
+      if (authError instanceof UnauthorizedAdminKeyError) {
+        return NextResponse.json({ error: authError.message }, { status: 401 });
+      }
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { matchId } = await params;
 
     const match = await prisma.match.findUnique({

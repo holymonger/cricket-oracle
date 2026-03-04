@@ -1,11 +1,21 @@
 import { NextResponse } from "next/server";
 import { extractFromOcrText } from "@/lib/ocr/scorecardExtract";
 import { extractTextFromImageBuffer } from "@/lib/ocr/provider";
+import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   try {
+    try {
+      rateLimitOrThrow(req);
+    } catch (rateLimitError) {
+      if (rateLimitError instanceof RateLimitExceededError) {
+        return NextResponse.json({ error: rateLimitError.message }, { status: 429 });
+      }
+      throw rateLimitError;
+    }
+
     const contentType = req.headers.get("content-type") || "";
 
     let rawText = "";
