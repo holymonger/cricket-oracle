@@ -31,6 +31,12 @@ model Match {
   snapshots        MatchStateSnapshot[]
   matchPlayers     MatchPlayer[]
   ballEvents       BallEvent[]
+  ballPredictions  BallPrediction[]
+  liveCursors      LiveCursor[]
+  liveBallEvents   LiveBallEvent[]
+  liveInningsStates LiveInningsState[]
+  marketEvents     MarketEvent[]
+  edgeSignals      EdgeSignal[]
 
   @@unique([source, sourceMatchId])
   @@map("matches")
@@ -135,3 +141,163 @@ model Prediction {
   @@unique([snapshotId, modelVersion])
   @@map("predictions")
 }
+
+model BallPrediction {
+  id                String    @id @default(cuid())
+  matchId           String
+  match             Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  
+  innings           Int
+  legalBallNumber   Int
+  modelVersion      String    // e.g. "v3-lgbm", "v1", "v0"
+  teamAWinProb      Float     // probability Team A wins (0.0 - 1.0)
+  
+  featuresJson      Json?     // optional: store the feature row used for debugging
+  createdAt         DateTime  @default(now())
+
+  @@unique([matchId, innings, legalBallNumber, modelVersion])
+  @@index([matchId, modelVersion])
+  @@map("ball_predictions")
+}
+
+model LiveCursor {
+  id          String    @id @default(cuid())
+  matchId     String    @unique
+  match       Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  provider    String    // provider name (e.g. "cricsheet-replay")
+  cursor      String?   // last processed cursor (provider-specific)
+  updatedAt   DateTime  @updatedAt
+
+  @@index([matchId, provider])
+  @@map("live_cursors")
+}
+
+model LiveBallEvent {
+  id                String    @id @default(cuid())
+  matchId           String
+  match             Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  
+  provider          String
+  providerEventId   String    // stable unique ID from provider
+  
+  innings           Int
+  over              Int
+  ballInOver        Int
+  battingTeam       String    // "A" | "B"
+  
+  striker           String
+  nonStriker        String
+  bowler            String
+  
+  runsBat           Int
+  runsExtras        Int
+  runsTotal         Int
+  extrasJson        Json?
+  wicketsJson       Json?
+  
+  isWide            Boolean   @default(false)
+  isNoBall          Boolean   @default(false)
+  isLegal           Boolean   @default(true)
+  
+  occurredAt        DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([matchId, innings, over, ballInOver])
+  @@map("live_ball_events")
+}
+
+model LiveInningsState {
+  id          String    @id @default(cuid())
+  matchId     String
+  match       Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  innings     Int
+  runs        Int       @default(0)
+  wickets     Int       @default(0)
+  balls       Int       @default(0)
+  targetRuns  Int?
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([matchId, innings])
+  @@index([matchId])
+  @@map("live_innings_states")
+}
+
+model Market {
+  id            String         @id @default(cuid())
+  name          String         @unique  // e.g. "rollbit", "polymarket"
+  createdAt     DateTime       @default(now())
+
+  marketEvents  MarketEvent[]
+
+  @@map("markets")
+}
+
+model MarketEvent {
+  id                    String      @id @default(cuid())
+  matchId               String
+  match                 Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  marketId              String
+  market                Market      @relation(fields: [marketId], references: [id], onDelete: Cascade)
+  
+  externalEventId       String      // market's unique identifier for this event
+  selectionTeamAName    String      // team name as provided by market (for audit)
+  selectionTeamBName    String
+  status                String?     // e.g. "open", "closed", "settled"
+  
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  oddsTicks             OddsTick[]
+  edgeSignals           EdgeSignal[]
+
+  @@unique([marketId, externalEventId])
+  @@index([matchId])
+  @@map("market_events")
+}
+
+model OddsTick {
+  id                String      @id @default(cuid())
+  marketEventId     String
+  marketEvent       MarketEvent @relation(fields: [marketEventId], references: [id], onDelete: Cascade)
+  
+  observedAt        DateTime    // when odds were observed
+  side              String      // "A" or "B"
+  oddsDecimal       Float       // decimal odds (e.g. 2.5)
+  impliedProbRaw    Float       // 1/oddsDecimal (includes overround)
+  
+  sourceJson        Json?       // raw JSON from provider for debugging
+  createdAt         DateTime    @default(now())
+
+  @@index([marketEventId, observedAt])
+  @@index([side])
+  @@map("odds_ticks")
+}
+
+model EdgeSignal {
+  id                String      @id @default(cuid())
+  matchId           String
+  match             Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  marketEventId     String
+  marketEvent       MarketEvent @relation(fields: [marketEventId], references: [id], onDelete: Cascade)
+  
+  modelVersion      String      // e.g. "v3-lgbm", "v1"
+  observedAt        DateTime    // when this signal was computed
+  
+  teamAWinProb      Float       // model's prediction for Team A win
+  marketProbA       Float       // market's fair probability for Team A (vig removed)
+  edgeA             Float       // teamAWinProb - marketProbA (positive = model favors A)
+  
+  overround         Float?      // total overround (probA_raw + probB_raw - 1)
+  notes             String?     // e.g. "one-sided market", "stale prediction"
+  
+  createdAt         DateTime    @default(now())
+
+  @@index([matchId, observedAt])
+  @@index([edgeA])
+  @@index([observedAt])
+  @@map("edge_signals")
+}
+
+

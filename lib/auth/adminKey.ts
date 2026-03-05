@@ -22,6 +22,25 @@ export function getAdminKeyFromRequest(req: Request): string | null {
   return req.headers.get("x-admin-key");
 }
 
+/**
+ * Verify admin key from request headers
+ * Returns true if key is valid, false otherwise (does not throw)
+ */
+export function verifyAdminKey(key: string | null): boolean {
+  const expectedKey = process.env.ADMIN_KEY;
+
+  if (!expectedKey) {
+    console.error("Server misconfiguration: ADMIN_KEY environment variable is not set");
+    return false;
+  }
+
+  if (!key) {
+    return false;
+  }
+
+  return key === expectedKey;
+}
+
 export function assertAdminKey(req: Request): void {
   const providedKey = getAdminKeyFromRequest(req);
   const expectedKey = process.env.ADMIN_KEY;

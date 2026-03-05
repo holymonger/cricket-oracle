@@ -83,6 +83,13 @@ export default function MatchPage() {
   const [adminKeyError, setAdminKeyError] = useState<string>("");
   const [adminKeyStatus, setAdminKeyStatus] = useState<"saved" | "missing" | "">("missing");
 
+  // Replay controls
+  const [replayProvider, setReplayProvider] = useState<string>("cricsheet-replay");
+  const [replayActive, setReplayActive] = useState(false);
+  const [replayPolling, setReplayPolling] = useState(false);
+  const [replayStatus, setReplayStatus] = useState<string>("");
+  const [autoReplayInterval, setAutoReplayInterval] = useState<NodeJS.Timeout | null>(null);
+
   // Load admin key from localStorage on mount
   useEffect(() => {
     const saved = localStorage.getItem("cricket_oracle_admin_key");
@@ -103,6 +110,85 @@ export default function MatchPage() {
       loadLatestSnapshot(urlMatchId);
     }
   }, []);
+
+  // Replay polling function
+  async function pollReplayOnce() {
+    if (!matchId) {
+      setReplayStatus("⚠️ No match loaded");
+      return;
+    }
+
+    if (!adminKey) {
+      setReplayStatus("⚠️ Admin key required");
+      return;
+    }
+
+    setReplayPolling(true);
+    setReplayStatus("⏳ Polling...");
+
+    try {
+      const res = await fetch("/api/realtime/poll", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-admin-key": adminKey,
+        },
+        body: JSON.stringify({
+          matchId,
+          provider: replayProvider,
+          limit: 1,
+        }),
+      });
+
+      if (!res.ok) {
+        const error = await res.json();
+        setReplayStatus(`❌ Error: ${error.message || res.statusText}`);
+        return;
+      }
+
+      const data = await res.json();
+      setReplayStatus(
+        `✓ Processed ${data.processed}/${data.fetched} events (cursor: ${data.nextCursor || 'none'})`
+      );
+
+      // Reload latest snapshot to update UI
+      if (data.processed > 0) {
+        await loadLatestSnapshot(matchId);
+      }
+    } catch (err: any) {
+      setReplayStatus(`❌ ${err.message}`);
+    } finally {
+      setReplayPolling(false);
+    }
+  }
+
+  // Start/stop auto-polling
+  function toggleAutoReplay() {
+    if (autoReplayInterval) {
+      // Stop
+      clearInterval(autoReplayInterval);
+      setAutoReplayInterval(null);
+      setReplayActive(false);
+      setReplayStatus("⏸️ Auto-poll stopped");
+    } else {
+      // Start
+      setReplayActive(true);
+      setReplayStatus("▶️ Auto-poll started (1 ball/sec)");
+      const interval = setInterval(() => {
+        pollReplayOnce();
+      }, 1000);
+      setAutoReplayInterval(interval);
+    }
+  }
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (autoReplayInterval) {
+        clearInterval(autoReplayInterval);
+      }
+    };
+  }, [autoReplayInterval]);
 
   async function loadLatestSnapshot(targetMatchId: string) {
     try {
@@ -470,6 +556,67 @@ export default function MatchPage() {
           </div>
         )}
       </div>
+
+      {/* Replay Controls Section */}
+      {matchId && (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-6 space-y-4">
+          <h2 className="text-xl font-semibold text-purple-900">🎬 Live Replay Simulator</h2>
+          <p className="text-sm text-gray-700">
+            Simulate real-time ball-by-ball feed from Cricsheet data. Each poll fetches the next delivery.
+          </p>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Provider</label>
+              <select
+                className="w-full border rounded px-3 py-2"
+                value={replayProvider}
+                onChange={(e) => setReplayProvider(e.target.value)}
+                disabled={replayActive}
+              >
+                <option value="cricsheet-replay">Cricsheet Replay</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Actions</label>
+              <div className="flex gap-2">
+                <button
+                  onClick={pollReplayOnce}
+                  disabled={replayPolling || !adminKey}
+                  className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm font-medium transition"
+                >
+                  {replayPolling ? "Polling..." : "Poll Once"}
+                </button>
+                <button
+                  onClick={toggleAutoReplay}
+                  disabled={!adminKey}
+                  className={`flex-1 ${
+                    replayActive
+                      ? "bg-red-600 hover:bg-red-700"
+                      : "bg-green-600 hover:bg-green-700"
+                  } disabled:bg-gray-400 text-white px-4 py-2 rounded text-sm font-medium transition`}
+                >
+                  {replayActive ? "⏸️ Stop Auto" : "▶️ Auto-poll"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {replayStatus && (
+            <div className="bg-white border border-gray-300 rounded px-4 py-2 text-sm font-mono">
+              {replayStatus}
+            </div>
+          )}
+
+          {!adminKey && (
+            <div className="bg-yellow-100 border border-yellow-300 rounded p-3 text-sm text-yellow-800">
+              ⚠️ Set admin key above to enable replay controls
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Match State</h2>
         

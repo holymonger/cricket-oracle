@@ -67,18 +67,36 @@ async function importCricsheetFile(filePath: string): Promise<void> {
     : undefined;
   const venue = data.info.venue;
   const city = data.info.city;
-  const teamAName = data.info.teams[0];
-  const teamBName = data.info.teams[1];
+
+  // Normalize team order for consistency across imports
+  // This ensures Team A/B are always in the same relative position across all matches,
+  // which prevents the bug where Team A represents different real-world teams.
+  // Sort alphabetically so: min(team1, team2) → Team A, max(team1, team2) → Team B
+  const rawTeam1 = data.info.teams[0];
+  const rawTeam2 = data.info.teams[1];
+  const [normalizedTeamA, normalizedTeamB] =
+    rawTeam1.localeCompare(rawTeam2) <= 0
+      ? [rawTeam1, rawTeam2]
+      : [rawTeam2, rawTeam1];
+
+  // Map original JSON teams (for interpreting innings/outcome/toss) to normalized sides
+  // This tells us which "side" each original team became after normalization
+  const rawTeamToNormalizedSide = (rawTeam: string): "A" | "B" => {
+    if (rawTeam === normalizedTeamA) return "A";
+    if (rawTeam === normalizedTeamB) return "B";
+    throw new Error(
+      `Team "${rawTeam}" not found in normalized teams (${normalizedTeamA} vs ${normalizedTeamB})`
+    );
+  };
+
   const registry = data.info.registry?.people || {};
 
-  // Determine winner and toss winner
+  // Determine winner and toss winner (using normalized sides)
   const outcomeName = data.info.outcome?.winner;
-  const winnerTeam =
-    outcomeName === teamAName ? "A" : outcomeName === teamBName ? "B" : null;
+  const winnerTeam = outcomeName ? rawTeamToNormalizedSide(outcomeName) : null;
 
   const tossPerson = data.info.toss?.winner;
-  const tossWinnerTeam =
-    tossPerson === teamAName ? "A" : tossPerson === teamBName ? "B" : null;
+  const tossWinnerTeam = tossPerson ? rawTeamToNormalizedSide(tossPerson) : null;
   const tossDecision = data.info.toss?.decision;
 
   // Create or update Match
@@ -95,13 +113,13 @@ async function importCricsheetFile(filePath: string): Promise<void> {
     match = await prisma.match.update({
       where: { id: match.id },
       data: {
-        teamA: teamAName,
-        teamB: teamBName,
+        teamA: normalizedTeamA,
+        teamB: normalizedTeamB,
         matchDate,
         venue,
         city,
-        teamAName,
-        teamBName,
+        teamAName: rawTeam1, // Original teams for reference
+        teamBName: rawTeam2,
         winnerTeam,
         tossWinnerTeam,
         tossDecision,
@@ -111,15 +129,15 @@ async function importCricsheetFile(filePath: string): Promise<void> {
     // Create new match
     match = await prisma.match.create({
       data: {
-        teamA: teamAName,
-        teamB: teamBName,
+        teamA: normalizedTeamA,
+        teamB: normalizedTeamB,
         source: "cricsheet",
         sourceMatchId,
         matchDate,
         venue,
         city,
-        teamAName,
-        teamBName,
+        teamAName: rawTeam1, // Original teams for reference
+        teamBName: rawTeam2,
         winnerTeam,
         tossWinnerTeam,
         tossDecision,
@@ -127,7 +145,9 @@ async function importCricsheetFile(filePath: string): Promise<void> {
     });
   }
 
-  console.log(`✓ Match: ${teamAName} vs ${teamBName} (ID: ${match.id})`);
+  console.log(
+    `✓ Match: ${normalizedTeamA} vs ${normalizedTeamB} (ID: ${match.id}) [${rawTeam1} vs ${rawTeam2}]`
+  );
 
   // Collect all player names from all innings
   const allPlayerNames = new Set<string>();
@@ -171,15 +191,20 @@ async function importCricsheetFile(filePath: string): Promise<void> {
   console.log(`✓ Players: ${playerMap.size} records`);
 
   // Upsert MatchPlayers
+  // Map original team names to their players, then map to normalized sides
   const players = data.info.players || {};
-  const teamAPlayers = players[teamAName] || [];
-  const teamBPlayers = players[teamBName] || [];
+  const rawTeam1Players = players[rawTeam1] || [];
+  const rawTeam2Players = players[rawTeam2] || [];
+  
+  // Determine which normalized side each raw team became
+  const rawTeam1NormalizedSide = rawTeamToNormalizedSide(rawTeam1);
+  const rawTeam2NormalizedSide = rawTeamToNormalizedSide(rawTeam2);
 
   // Clear existing match players for this match
   // (optional - use deleteMany if you want clean import)
   // await prisma.matchPlayer.deleteMany({ where: { matchId: match.id } });
 
-  for (const playerName of teamAPlayers) {
+  for (const playerName of rawTeam1Players) {
     const playerId = playerMap.get(playerName);
     if (playerId) {
       await prisma.matchPlayer.upsert({
@@ -192,14 +217,14 @@ async function importCricsheetFile(filePath: string): Promise<void> {
         create: {
           matchId: match.id,
           playerId,
-          team: "A",
+          team: rawTeam1NormalizedSide,
         },
         update: {},
       });
     }
   }
 
-  for (const playerName of teamBPlayers) {
+  for (const playerName of rawTeam2Players) {
     const playerId = playerMap.get(playerName);
     if (playerId) {
       await prisma.matchPlayer.upsert({
@@ -212,7 +237,7 @@ async function importCricsheetFile(filePath: string): Promise<void> {
         create: {
           matchId: match.id,
           playerId,
-          team: "B",
+          team: rawTeam2NormalizedSide,
         },
         update: {},
       });
@@ -229,7 +254,7 @@ async function importCricsheetFile(filePath: string): Promise<void> {
   for (const inn of data.innings) {
     inningsCount++;
     const battingTeamName = inn.team;
-    const battingTeam = battingTeamName === teamAName ? "A" : "B";
+    const battingTeam = rawTeamToNormalizedSide(battingTeamName);
     let legalBallNumber = 0; // Track legal balls (0-120 per innings)
 
     for (const over of inn.overs) {

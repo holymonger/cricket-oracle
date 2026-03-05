@@ -1,0 +1,216 @@
+import {
+  DerivedBallState,
+  BallStateItem,
+  MatchInfo,
+  BallEventRecord,
+} from "./stateFromBalls";
+
+/**
+ * Single point on the win probability timeline
+ */
+export interface TimelinePoint {
+  // Ball identification
+  innings: 1 | 2;
+  over: number;
+  ballInOver: number;
+  ballLabel: string; // "1.1", "3.4", etc.
+  ballNumberInInnings: number; // 1..120, only incremented for legal balls
+  ballNumberInMatch: number; // 1..240, all balls
+
+  // Prediction
+  teamAWinProb: number; // 0..100
+
+  // State snapshot
+  runs: number; // Team runs in this innings
+  wickets: number;
+  runsThisBall: number;
+  battingTeam: "A" | "B";
+  targetRuns?: number;
+
+  // Event markers
+  isWicket: boolean;
+  isFour: boolean; // 4 runs from batting team
+  isSix: boolean; // 6 runs from batting team
+  isWide: boolean;
+  isNoBall: boolean;
+  isLegalBall: boolean;
+}
+
+/**
+ * Summary of first and second innings
+ */
+export interface TimelineSummary {
+  firstInningsRuns: number;
+  firstInningsWickets: number;
+  secondInningsTarget?: number;
+  secondInningsRuns?: number;
+  secondInningsWickets?: number;
+  result: "in-progress" | "completed" | "unknown"; // Based on match.winnerTeam
+}
+
+/**
+ * Complete timeline result
+ */
+export interface PredictTimelineResult {
+  match: MatchInfo;
+  timeline: TimelinePoint[];
+  summary: TimelineSummary;
+}
+
+/**
+ * Simple mock computeWinProb for testing
+ * In production, this would be imported from model/v1Logistic.ts or similar
+ */
+function mockComputeWinProb(state: DerivedBallState, modelVersion: string): number {
+  // Simple heuristic: Team A win% based on runs, wickets, balls
+  const overs = Math.floor(state.balls / 6);
+  const ballsInOver = state.balls % 6;
+  const runRate = state.balls > 0 ? (state.runs / state.balls) * 6 : 0;
+
+  // Base score
+  let winProb = 50;
+
+  // For innings 1: higher runs = higher win%
+  if (state.innings === 1) {
+    if (runRate > 9) winProb += 20;
+    else if (runRate > 8) winProb += 15;
+    else if (runRate > 7) winProb += 10;
+    else if (runRate > 6) winProb += 5;
+    else if (runRate < 5) winProb -= 10;
+
+    // Wickets reduce win%
+    winProb -= state.wickets * 5;
+  } else {
+    // Innings 2: compare vs target
+    if (state.targetRuns) {
+      const runsRemaining = state.targetRuns - state.runs;
+      const ballsRemaining = 120 - state.balls;
+      const requiredRunRate =
+        ballsRemaining > 0 ? (runsRemaining / ballsRemaining) * 6 : 0;
+
+      if (runsRemaining <= 0) {
+        winProb = 95;
+      } else if (requiredRunRate < 6) {
+        winProb = 70;
+      } else if (requiredRunRate < 8) {
+        winProb = 50;
+      } else if (requiredRunRate < 10) {
+        winProb = 30;
+      } else {
+        winProb = 10;
+      }
+
+      // Wickets make it harder
+      winProb -= state.wickets * 5;
+    }
+  }
+
+  return Math.max(0, Math.min(100, winProb));
+}
+
+/**
+ * Build a win probability timeline from ball state items
+ * Optionally call a real model's computeWinProb
+ */
+export async function predictWinProbTimeline(
+  match: MatchInfo,
+  ballStateItems: BallStateItem[],
+  modelVersion: string = "v1",
+  computeWinProbFn?: (state: DerivedBallState, version: string) => number
+): Promise<PredictTimelineResult> {
+  const computeWinProb = computeWinProbFn || mockComputeWinProb;
+
+  const timeline: TimelinePoint[] = [];
+  let ballNumberInMatch = 0;
+
+  // Extract first innings totals
+  let firstInningsRuns = 0;
+  let firstInningsWickets = 0;
+  let secondInningsTarget: number | undefined;
+
+  for (const item of ballStateItems) {
+    if (item.stateAfterEvent.innings === 1) {
+      firstInningsRuns = item.stateAfterEvent.runs;
+      firstInningsWickets = item.stateAfterEvent.wickets;
+    }
+  }
+
+  // Build timeline
+  for (const item of ballStateItems) {
+    const { event, stateAfterEvent } = item;
+    ballNumberInMatch++;
+
+    // Only add prediction for legal balls
+    if (stateAfterEvent.isLegalBall && stateAfterEvent.legalBallNumber !== null) {
+      const teamAWinProb = computeWinProb(stateAfterEvent, modelVersion);
+
+      const ballLabel = `${stateAfterEvent.over}.${stateAfterEvent.ballInOver}`;
+
+      // Determine 4/6 markers
+      let isFour = false;
+      let isSix = false;
+      if (!stateAfterEvent.isWide && !stateAfterEvent.isNoBall) {
+        if (stateAfterEvent.runsThisBall === 4) isFour = true;
+        else if (stateAfterEvent.runsThisBall === 6) isSix = true;
+      }
+
+      if (stateAfterEvent.innings === 2 && !secondInningsTarget && firstInningsRuns > 0) {
+        secondInningsTarget = firstInningsRuns + 1;
+      }
+
+      timeline.push({
+        innings: stateAfterEvent.innings,
+        over: stateAfterEvent.over,
+        ballInOver: stateAfterEvent.ballInOver,
+        ballLabel,
+        ballNumberInInnings: stateAfterEvent.legalBallNumber,
+        ballNumberInMatch,
+        teamAWinProb,
+        runs: stateAfterEvent.runs,
+        wickets: stateAfterEvent.wickets,
+        runsThisBall: stateAfterEvent.runsThisBall,
+        battingTeam: stateAfterEvent.battingTeam,
+        targetRuns: stateAfterEvent.targetRuns,
+        isWicket: stateAfterEvent.isWicket,
+        isFour,
+        isSix,
+        isWide: stateAfterEvent.isWide,
+        isNoBall: stateAfterEvent.isNoBall,
+        isLegalBall: stateAfterEvent.isLegalBall,
+      });
+    }
+  }
+
+  // Determine result status
+  let result: "in-progress" | "completed" | "unknown" = "unknown";
+  if (match.winnerTeam !== null && match.winnerTeam !== undefined) {
+    result = "completed";
+  } else if (timeline.length > 0) {
+    result = "in-progress";
+  }
+
+  // Extract second innings summary if available
+  let secondInningsRuns: number | undefined;
+  let secondInningsWickets: number | undefined;
+  for (const item of ballStateItems) {
+    if (item.stateAfterEvent.innings === 2) {
+      secondInningsRuns = item.stateAfterEvent.runs;
+      secondInningsWickets = item.stateAfterEvent.wickets;
+    }
+  }
+
+  const summary: TimelineSummary = {
+    firstInningsRuns,
+    firstInningsWickets,
+    secondInningsTarget,
+    secondInningsRuns,
+    secondInningsWickets,
+    result,
+  };
+
+  return {
+    match,
+    timeline,
+    summary,
+  };
+}

@@ -12,6 +12,9 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev --name init",
     "import:cricsheet": "tsx scripts/importCricsheetJson.ts",
+    "export:training": "tsx scripts/exportTrainingData.ts",
+    "predict:match": "tsx scripts/predictImportedMatch.ts",
+    "predict:all": "tsx scripts/predictAllImportedMatches.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {

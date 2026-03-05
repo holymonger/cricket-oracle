@@ -127,6 +127,102 @@ Because this limiter is in-memory (v0), counters reset when server instances res
   - Using HTTPS only (Vercel handles this)
 - Never commit `.env.local` to Git (it's in `.gitignore`)
 
+## Match Data & Cricsheet Imports
+
+### Team Mapping (A/B Sides)
+
+All matches use a consistent **"A" / "B" side system** for storing match data:
+
+#### Manual Matches
+- **Team A** = whatever you enter in the UI
+- **Team B** = whatever you enter in the UI
+- `source = null`, `sourceMatchId = null` (no Cricsheet data)
+
+#### Imported Matches (Cricsheet JSON) – Team Normalization
+
+To fix the **#1 win-probability bug** (Team A representing different real-world teams across matches), imported matches are **automatically normalized**:
+
+- **Team A** = alphabetically lower of the two teams
+- **Team B** = alphabetically higher of the two teams
+- `teamAName` / `teamBName` fields store the original teams for reference
+
+**Example:**
+- Match 1: CSK vs RCB → normalized to CSK (Team A) vs RCB (Team B)
+- Match 2: RCB vs MI → normalized to MI (Team A) vs RCB (Team B)
+- Match 3: CSK vs MI → normalized to CSK (Team A) vs MI (Team B)
+
+This ensures:
+- ✅ Team A is always the same alphabetical position across all imports
+- ✅ Global models see consistent team representations
+- ✅ Win probabilities remain meaningful when aggregating match data
+
+**Import metadata:**
+- `source = "cricsheet"`, `sourceMatchId = filename` (e.g., "335982")
+- `matchDate` - parsed from `info.dates[0]`
+- `venue`, `city` - from JSON metadata
+- `winnerTeam` - stored as "A" or "B" (relative to normalized order)
+- `tossWinnerTeam` - stored as "A" or "B"
+- `tossDecision` - "bat" or "field"
+
+### BallEvent Storage
+
+All ball events store `battingTeam` as "A" or "B" relative to the match's normalized teamA/teamB values, regardless of whether the match was manually created or imported.
+
+### Win Probability Computation
+
+The `computeWinProb()` function returns **Team A win percentage consistently** for both manual and imported matches. Interpretation:
+- **Manual match:** Team A win% for the teams you entered
+- **Imported match:** Team A win% for the alphabetically-lower team
+
+This is why normalization is important: without it, Team A would represent different real-world teams in different matches, making the model predictions meaningless.
+
+### Team Mapping Utilities
+
+For code that needs to convert between team names and sides:
+
+```typescript
+import { teamNameToSide, sideToTeamName } from "@/lib/cricket/teamMapping";
+
+// Convert team name to side
+const side = teamNameToSide({ teamA: "CSK", teamB: "RCB" }, "RCB"); // Returns "B"
+
+// Convert side to team name
+const name = sideToTeamName({ teamA: "CSK", teamB: "RCB" }, "A"); // Returns "CSK"
+```
+
+## Realtime Delivery API (Post-Delivery Predictions)
+
+Endpoint: `POST /api/realtime/delivery` (admin protected)
+
+This endpoint accepts a canonical post-delivery payload and writes:
+- `LiveBallEvent` for every delivery
+- `BallPrediction` only for legal deliveries (`!wide && !noBall`)
+
+Predictions are computed **after** the delivery is applied to innings state (post-delivery context).
+
+Canonical payload shape:
+
+```json
+{
+  "matchId": "<match-id>",
+  "innings": 1,
+  "over": 4,
+  "ballInOver": 2,
+  "battingTeamName": "Mumbai Indians",
+  "strikerName": "R Sharma",
+  "nonStrikerName": "I Kishan",
+  "bowlerName": "J Bumrah",
+  "runs": { "total": 1, "bat": 1, "extras": 0 },
+  "extras": { "wides": 0, "noballs": 0, "byes": 0, "legbyes": 0 },
+  "wickets": [],
+  "provider": "realtime-delivery",
+  "providerEventId": "optional-stable-event-id",
+  "occurredAt": "2026-03-05T12:34:56.000Z"
+}
+```
+
+Response includes `legalBallNumber` and `teamAWinProb` for legal balls.
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:
