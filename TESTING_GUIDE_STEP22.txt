@@ -1,0 +1,233 @@
+/**
+ * STEP 22: Per-Ball Team A Win% Chart - Testing Guide
+ * 
+ * Complete end-to-end setup to test the timeline visualization for imported matches.
+ */
+
+/*
+=== QUICK START ===
+
+1. ENSURE DATABASE MIGRATION
+   cd cricket-oracle
+   npx prisma migrate dev --name update_match_schema
+   (This ensures all fields from Step 21 exist: source, sourceMatchId, etc.)
+
+2. START DEV SERVER
+   npm run dev
+   (Should start on http://localhost:3000)
+
+3. IMPORT A CRICSHEET MATCH
+   
+   Option A: Using CLI (if you have a Cricsheet JSON file)
+     tsx scripts/importCricsheetJson.ts ../ipl_json/1082591.json
+   
+   Option B: Manual import via Node
+     See MANUAL IMPORT section below
+
+4. GET ADMIN KEY
+   Copy the ADMIN_KEY value from your .env.local
+   (It's configured in your project setup)
+
+5. TEST THE FLOW
+   
+   Step 5a: List imported matches
+   - Open browser: http://localhost:3000/imports
+   - Paste ADMIN_KEY when prompted
+   - You should see at least one imported match
+   
+   Step 5b: View timeline
+   - Click "View Timeline" on any match
+   - You should see:
+     * Match header (Team A vs Team B)
+     * Model version selector (v0/v1)
+     * Summary stats (1st inns, target, 2nd inns)
+     * Interactive chart showing Team A win% over balls
+     * Key events (wickets, fours, sixes)
+
+
+=== MANUAL IMPORT (If CLI import isn't working) ===
+
+Using Node REPL:
+
+  const { PrismaClient } = require('@prisma/client');
+  const prisma = new PrismaClient();
+  
+  // Create a test match
+  const match = await prisma.match.create({
+    data: {
+      teamA: "Team_A_Alpha",
+      teamB: "Team_B_Bravo",
+      source: "cricsheet",
+      sourceMatchId: "test-12345",
+      matchDate: new Date("2024-01-15"),
+      venue: "Test Stadium",
+      city: "Test City",
+      teamAName: "Team_A_Alpha",  // Normalized alphabetically
+      teamBName: "Team_B_Bravo",
+      winnerTeam: null,
+    },
+  });
+  
+  console.log("Match created:", match.id);
+  
+  // Create players
+  const player1 = await prisma.player.create({
+    data: {
+      name: "Batter_One",
+      externalId: "player_1",
+    },
+  });
+  
+  const player2 = await prisma.player.create({
+    data: {
+      name: "Batter_Two",
+      externalId: "player_2",
+    },
+  });
+  
+  const bowler1 = await prisma.player.create({
+    data: {
+      name: "Bowler_One",
+      externalId: "bowler_1",
+    },
+  });
+  
+  // Add players to match
+  await prisma.matchPlayer.createMany({
+    data: [
+      { matchId: match.id, playerId: player1.id, team: "A" },
+      { matchId: match.id, playerId: player2.id, team: "A" },
+      { matchId: match.id, playerId: bowler1.id, team: "B" },
+    ],
+  });
+  
+  // Create ball events for innings 1 (15 runs in 12 balls)
+  const balls = [];
+  for (let i = 0; i < 12; i++) {
+    const over = Math.floor(i / 6);
+    const ballInOver = (i % 6) + 1;
+    balls.push({
+      matchId: match.id,
+      innings: 1,
+      over,
+      ballInOver,
+      legalBallNumber: i + 1,
+      battingTeam: "A",
+      strikerId: player1.id,
+      nonStrikerId: player2.id,
+      bowlerId: bowler1.id,
+      runsBat: i % 4 === 0 ? 4 : (i % 3 === 0 ? 2 : 1),
+      runsExtras: 0,
+      runsTotal: i % 4 === 0 ? 4 : (i % 3 === 0 ? 2 : 1),
+      isWide: false,
+      isNoBall: false,
+      isWicket: i === 10,
+    });
+  }
+  
+  await prisma.ballEvent.createMany({ data: balls });
+  
+  // Create innings 2 (chase: target = 16)
+  const chaseRuns = 10; // Partial chase
+  for (let i = 0; i < 8; i++) {
+    const over = Math.floor(i / 6);
+    const ballInOver = (i % 6) + 1;
+    balls.push({
+      matchId: match.id,
+      innings: 2,
+      over,
+      ballInOver,
+      legalBallNumber: i + 1,
+      battingTeam: "B",
+      strikerId: player2.id,
+      nonStrikerId: player1.id,
+      bowlerId: bowler1.id,
+      runsBat: i % 3 === 0 ? 2 : 1,
+      runsExtras: 0,
+      runsTotal: i % 3 === 0 ? 2 : 1,
+      isWide: false,
+      isNoBall: false,
+      isWicket: false,
+    });
+  }
+  
+  await prisma.ballEvent.createMany({ data: balls.slice(12) });
+  
+  console.log("Test data created successfully!");
+  await prisma.$disconnect();
+
+=== TESTING CHECKLIST ===
+
+[ ] 1. Database has match with source="cricsheet"
+    Check: SELECT * FROM matches WHERE source = 'cricsheet';
+
+[ ] 2. Match has associated ball events (50-120 per innings expected)
+    Check: SELECT COUNT(*) FROM ball_events WHERE match_id = '<matchId>';
+
+[ ] 3. Ball events have correct structure
+    Check: SELECT * FROM ball_events LIMIT 5;
+    Verify: innings (1|2), over (0-19), ballInOver (1-6), legalBallNumber (null or 1-120)
+
+[ ] 4. /imports page loads (without admin key, should show prompt)
+    Go to: http://localhost:3000/imports
+
+[ ] 5. After entering ADMIN_KEY, imported matches list appears
+    Verify: At least 1 match in table
+
+[ ] 6. Clicking "View Timeline" loads the individual match
+    Go to: http://localhost:3000/imports/<matchId>
+
+[ ] 7. Chart renders without errors
+    Verify: SVG chart with line chart visible
+
+[ ] 8. Chart has correct axes
+    Verify: X-axis labeled "Ball Number", Y-axis labeled "Team A Win %"
+    Verify: Y-axis shows percentage marks (0%, 25%, 50%, 75%, 100%)
+
+[ ] 9. Hovering over chart shows tooltip
+    Verify: Ball label, Win%, Score, Runs/Wickets shown
+
+[ ] 10. Key Events section lists wickets/fours/sixes
+    Verify: Events are not empty if match has them
+
+[ ] 11. Switching model version re-fetches data
+    Change dropdown from v1 to v0
+    Verify: Chart updates (win% values may change)
+
+[ ] 12. Innings transition is visual (vertical dashed line between innings)
+    Verify: If match has 2 innings, line visible between them
+
+=== EXPECTED BEHAVIOR ===
+
+For a typical imported match:
+- Innings 1: Team A bats, scores 120-160 runs, 6-8 wickets
+- Team A win% typically starts low, increases with runs/decreases with wickets
+- Innings 2: Team B chases target
+- If Team B scores more than target: Team A win% drops to ~0%, rises to 95%+ at end
+
+=== PERFORMANCE EXPECTATIONS ===
+
+- Page load: < 2 seconds
+- API response (/api/matches/[matchId]/timeline): < 500ms
+- Chart interactive: smooth hover without lag
+
+=== DEBUGGING ===
+
+If chart doesn't show:
+1. Check browser console (F12 > Console tab) for JS errors
+2. Check network tab: is /api/matches/[matchId]/timeline returning 200?
+3. Verify admin key is saved in localStorage
+
+If timeline is empty:
+1. Verify match has BallEvent records (check DB)
+2. Ensure BallEvent.legalBallNumber is set correctly for legal balls
+
+If win% seems wrong:
+1. Review mockComputeWinProb in predictTimeline.ts
+2. Expected: simple heuristic based on runs, wickets, balls
+
+=== NEXT STEPS AFTER SUCCESS ===
+
+- Replace mockComputeWinProb with real model from lib/model/v1Logistic.ts
+- Add more visualization (run rate, partnerships, field placements)
+- Export data as CSV for analysis

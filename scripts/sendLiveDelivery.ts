@@ -3,8 +3,8 @@
  * Tests targetRuns validation for innings 2
  */
 
-const ADMIN_KEY = process.env.ADMIN_KEY || "test-admin-key";
-const BASE_URL = process.env.BASE_URL || "http://localhost:3000";
+const DELIVERY_ADMIN_KEY = process.env.ADMIN_KEY || "test-admin-key";
+const DELIVERY_BASE_URL = process.env.BASE_URL || "http://localhost:3000";
 
 interface DeliveryPayload {
   matchId: string;
@@ -33,11 +33,11 @@ interface DeliveryPayload {
 }
 
 async function sendDelivery(payload: DeliveryPayload): Promise<{ status: number; body: unknown }> {
-  const response = await fetch(`${BASE_URL}/api/realtime/delivery`, {
+  const response = await fetch(`${DELIVERY_BASE_URL}/api/realtime/delivery`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "x-admin-key": ADMIN_KEY,
+      "x-admin-key": DELIVERY_ADMIN_KEY,
     },
     body: JSON.stringify(payload),
   });
