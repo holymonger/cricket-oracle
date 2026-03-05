@@ -1,225 +1,202 @@
 /**
  * Market Polling API Endpoint
  * POST /api/markets/poll
- * Fetches odds from aggregator and computes edge signals
+ * Accept odds snapshots and persist to database with edge signals
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
-import { verifyAdminKey } from "@/lib/auth/adminKey";
+import {
+  assertAdminKey,
+  UnauthorizedAdminKeyError,
+} from "@/lib/auth/adminKey";
 import { prisma } from "@/lib/db/prisma";
-import { oddsAggregatorClient } from "@/lib/providers/oddsAggregator/client";
-import { processAggregatorPayload } from "@/lib/providers/oddsAggregator/adapter";
-
-const PollRequestSchema = z.object({
-  matchId: z.string().min(1),
-});
+import { safeValidateOddsPoll } from "@/lib/live/oddsSchema";
+import { fairProbAFromTwoSidedDecimal } from "@/lib/markets/decimal";
+import {
+  persistOddsTicks,
+  upsertEdgeSignal,
+  type PersistOddsResult,
+} from "@/lib/markets/persistence";
 
 /**
  * POST /api/markets/poll
- * Fetch odds and compute edge signals
+ * Persist odds and compute edge signals
  */
 export async function POST(request: NextRequest) {
-  // Admin auth
-  const adminKey = request.headers.get("x-admin-key");
-  if (!verifyAdminKey(adminKey)) {
-    return NextResponse.json(
-      { error: "Unauthorized - invalid admin key" },
-      { status: 401 }
-    );
-  }
-
   try {
-    // Parse request body
+    assertAdminKey(request);
+
     const body = await request.json();
-    const { matchId } = PollRequestSchema.parse(body);
+    const parseResult = safeValidateOddsPoll(body);
 
-    // Load match
-    const match = await prisma.match.findUnique({
-      where: { id: matchId },
-      select: {
-        id: true,
-        teamA: true,
-        teamB: true,
-      },
-    });
-
-    if (!match) {
-      return NextResponse.json(
-        { error: "Match not found", matchId },
-        { status: 404 }
-      );
-    }
-
-    // Fetch odds from aggregator
-    let aggregatorPayload;
-    try {
-      aggregatorPayload = await oddsAggregatorClient.fetchOddsForMatch(match);
-    } catch (error: any) {
+    if (!parseResult.success) {
       return NextResponse.json(
         {
-          error: "Failed to fetch odds from aggregator",
-          message: error.message,
-          matchId,
-        },
-        { status: 503 }
-      );
-    }
-
-    // Process payload
-    const adapterResult = processAggregatorPayload(aggregatorPayload, match);
-
-    if (adapterResult.errors.length > 0) {
-      console.warn("Adapter errors:", adapterResult.errors);
-    }
-
-    if (adapterResult.events.length === 0) {
-      return NextResponse.json(
-        {
-          error: "No valid market events after processing",
-          matchId,
-          errors: adapterResult.errors,
+          error: "invalid_payload",
+          issues: parseResult.error.issues,
         },
         { status: 422 }
       );
     }
 
-    // Get latest prediction for this match (prefer v3-lgbm)
-    const latestPrediction = await prisma.prediction.findFirst({
-      where: {
-        snapshot: {
-          matchId,
-        },
-      },
-      orderBy: { createdAt: "desc" },
-      include: {
-        snapshot: true,
+    const input = parseResult.data;
+
+    // Verify match exists
+    const match = await prisma.match.findUnique({
+      where: { id: input.matchId },
+      select: { id: true, teamA: true, teamB: true },
+    });
+
+    if (!match) {
+      return NextResponse.json(
+        { error: "match_not_found", matchId: input.matchId },
+        { status: 404 }
+      );
+    }
+
+    // Get latest v3-lgbm prediction for this match
+    const modelVersion = "v3-lgbm";
+    const latestPred = await prisma.ballPrediction.findFirst({
+      where: { matchId: input.matchId, modelVersion },
+      orderBy: [
+        { innings: "desc" },
+        { legalBallNumber: "desc" },
+        { createdAt: "desc" },
+      ],
+      select: {
+        id: true,
+        innings: true,
+        legalBallNumber: true,
+        teamAWinProb: true,
+        createdAt: true,
       },
     });
 
-    if (!latestPrediction) {
+    if (!latestPred) {
       return NextResponse.json(
         {
-          error: "No predictions found for match",
-          message:
-            "Run predictions first (e.g., npm run predict:match -- <sourceMatchId>)",
-          matchId,
+          error: "no_ballprediction_for_match",
+          matchId: input.matchId,
+          modelVersion,
         },
         { status: 404 }
       );
     }
 
-    const teamAWinProb = latestPrediction.winProb;
-    const modelVersion = latestPrediction.modelVersion;
-    const predictionTime = latestPrediction.createdAt;
-
-    // Process each market event
-    const edgeSignals: Array<{
-      market: string;
-      teamAWinProb: number;
-      marketProbA: number;
-      edgeA: number;
-      overround: number;
-      observedAt: string;
+    const results: Array<{
+      marketName: string;
+      marketEventId: string;
+      ticksUpserted: number;
+      edgeSignal?: {
+        edgeA: number;
+        teamAWinProb: number;
+        marketProbA_fair: number;
+        overround: number;
+      };
+      warning?: string;
     }> = [];
 
-    for (const event of adapterResult.events) {
-      // Upsert Market
-      const market = await prisma.market.upsert({
-        where: { name: event.marketName },
-        create: { name: event.marketName },
-        update: {},
-      });
+    // Process each market snapshot
+    for (const mkt of input.markets) {
+      let persistResult: PersistOddsResult;
 
-      // Upsert MarketEvent
-      const marketEvent = await prisma.marketEvent.upsert({
-        where: {
-          marketId_externalEventId: {
-            marketId: market.id,
-            externalEventId: event.externalEventId,
+      try {
+        persistResult = await persistOddsTicks(match, mkt);
+      } catch (error: any) {
+        return NextResponse.json(
+          {
+            error: "team_mapping_failed",
+            message: error.message,
+            market: mkt.marketName,
+            selections: mkt.selections.map((s) => s.teamName),
+            matchTeamA: match.teamA,
+            matchTeamB: match.teamB,
           },
-        },
-        create: {
-          matchId: match.id,
-          marketId: market.id,
-          externalEventId: event.externalEventId,
-          selectionTeamAName: event.selectionTeamAName,
-          selectionTeamBName: event.selectionTeamBName,
-          status: "open",
-        },
-        update: {
-          selectionTeamAName: event.selectionTeamAName,
-          selectionTeamBName: event.selectionTeamBName,
-          status: "open",
-        },
-      });
-
-      // Insert OddsTicks
-      for (const tick of event.oddsTicks) {
-        await prisma.oddsTick.create({
-          data: {
-            marketEventId: marketEvent.id,
-            observedAt: event.observedAt,
-            side: tick.side,
-            oddsDecimal: tick.oddsDecimal,
-            impliedProbRaw: tick.impliedProbRaw,
-            sourceJson: tick.sourceJson || null,
-          },
-        });
+          { status: 422 }
+        );
       }
 
-      // Compute edge
-      const marketProbA = event.fairProbA;
-      const edgeA = teamAWinProb - marketProbA;
+      const result: (typeof results)[0] = {
+        marketName: mkt.marketName,
+        marketEventId: persistResult.marketEventId,
+        ticksUpserted: persistResult.ticksUpserted,
+      };
 
-      // Check staleness
-      const staleness = Math.abs(
-        event.observedAt.getTime() - predictionTime.getTime()
-      ) / 1000;
-      let notes = event.notes || "";
-      if (staleness > 10) {
-        notes += (notes ? "; " : "") + `stale prediction (${staleness.toFixed(0)}s old)`;
-      }
+      // If both sides present, compute edge signal
+      if (persistResult.oddsA && persistResult.oddsB) {
+        const fair = fairProbAFromTwoSidedDecimal(
+          persistResult.oddsA,
+          persistResult.oddsB
+        );
+        const observedAt = new Date(mkt.observedAt);
+        const teamAWinProb = latestPred.teamAWinProb;
+        const marketProbA_fair = fair.pA_fair;
+        const edgeA = teamAWinProb - marketProbA_fair;
 
-      // Store EdgeSignal
-      await prisma.edgeSignal.create({
-        data: {
+        // Check staleness
+        const staleness =
+          Math.abs(observedAt.getTime() - latestPred.createdAt.getTime()) /
+          1000;
+        let notes: string | undefined;
+        if (staleness > 10) {
+          notes = `stale prediction (${staleness.toFixed(0)}s old)`;
+        }
+
+        // Persist EdgeSignal
+        await upsertEdgeSignal({
           matchId: match.id,
-          marketEventId: marketEvent.id,
+          marketEventId: persistResult.marketEventId,
           modelVersion,
-          observedAt: event.observedAt,
+          observedAt,
+          predictionId: latestPred.id,
           teamAWinProb,
-          marketProbA,
+          marketProbA_raw: fair.pA_raw,
+          marketProbA_fair: fair.pA_fair,
+          overround: fair.overround,
           edgeA,
-          overround: event.overround,
-          notes: notes || null,
-        },
-      });
+          notes,
+        });
 
-      edgeSignals.push({
-        market: event.marketName,
-        teamAWinProb,
-        marketProbA,
-        edgeA,
-        overround: event.overround,
-        observedAt: event.observedAt.toISOString(),
-      });
+        result.edgeSignal = {
+          edgeA,
+          teamAWinProb,
+          marketProbA_fair,
+          overround: fair.overround,
+        };
+      } else {
+        result.warning = "only one side provided, edge signal not computed";
+      }
+
+      results.push(result);
     }
 
-    console.log(`✓ Processed ${edgeSignals.length} edge signals for match ${matchId}`);
-
     return NextResponse.json({
-      success: true,
-      matchId,
-      edgeSignals,
-      errors: adapterResult.errors.length > 0 ? adapterResult.errors : undefined,
+      ok: true,
+      matchId: input.matchId,
+      model: {
+        modelVersion,
+        innings: latestPred.innings,
+        legalBallNumber: latestPred.legalBallNumber,
+        teamAWinProb: latestPred.teamAWinProb,
+        predictionTime: latestPred.createdAt,
+      },
+      results,
     });
   } catch (error: any) {
-    console.error("Market poll error:", error);
+    if (
+      error instanceof UnauthorizedAdminKeyError ||
+      error?.name === "UnauthorizedAdminKeyError"
+    ) {
+      return NextResponse.json(
+        { error: "unauthorized_admin_key", message: error?.message },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
       {
-        error: "Failed to poll markets",
-        message: error.message,
+        error: "Failed to process markets poll",
+        message: error?.message || "Unknown error",
       },
       { status: 500 }
     );

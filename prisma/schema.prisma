@@ -264,14 +264,18 @@ model OddsTick {
   
   observedAt        DateTime    // when odds were observed
   side              String      // "A" or "B"
+  teamName          String      // team name as provided
   oddsDecimal       Float       // decimal odds (e.g. 2.5)
   impliedProbRaw    Float       // 1/oddsDecimal (includes overround)
+  provider          String      // same as marketName
+  providerEventId   String?     // optional for dedupe
   
   sourceJson        Json?       // raw JSON from provider for debugging
   createdAt         DateTime    @default(now())
 
+  @@unique([marketEventId, observedAt, side])
   @@index([marketEventId, observedAt])
-  @@index([side])
+  @@index([observedAt])
   @@map("odds_ticks")
 }
 
@@ -284,16 +288,18 @@ model EdgeSignal {
   
   modelVersion      String      // e.g. "v3-lgbm", "v1"
   observedAt        DateTime    // when this signal was computed
+  predictionId      String?     // optional: could point to BallPrediction.id
   
   teamAWinProb      Float       // model's prediction for Team A win
-  marketProbA       Float       // market's fair probability for Team A (vig removed)
-  edgeA             Float       // teamAWinProb - marketProbA (positive = model favors A)
+  marketProbA_raw   Float       // raw implied probability (includes overround)
+  marketProbA_fair  Float       // fair probability for Team A (vig removed)
+  overround         Float       // total overround (probA_raw + probB_raw)
+  edgeA             Float       // teamAWinProb - marketProbA_fair (positive = model favors A)
   
-  overround         Float?      // total overround (probA_raw + probB_raw - 1)
   notes             String?     // e.g. "one-sided market", "stale prediction"
-  
   createdAt         DateTime    @default(now())
 
+  @@unique([matchId, marketEventId, modelVersion, observedAt])
   @@index([matchId, observedAt])
   @@index([edgeA])
   @@index([observedAt])

@@ -77,10 +77,10 @@ export async function GET(request: NextRequest) {
         observedAt: signal.observedAt.toISOString(),
         oddsA: oddsA?.oddsDecimal || 0,
         oddsB: oddsB?.oddsDecimal || 0,
-        marketProbA: signal.marketProbA,
+        marketProbA: signal.marketProbA_fair,
         teamAWinProb: signal.teamAWinProb,
         edgeA: signal.edgeA,
-        overround: signal.overround || 1.0,
+        overround: signal.overround,
         notes: signal.notes,
         isStale,
       };
