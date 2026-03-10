@@ -3,13 +3,16 @@
  */
 
 import { prisma } from "@/lib/db/prisma";
+import { getDefaultModelVersion } from "@/lib/model";
 
 export async function getLatestBallPrediction(
   matchId: string,
-  modelVersion: string = "v3-lgbm"
+  modelVersion: string | null = null
 ) {
+  // If not specified, use the default model version
+  const version = modelVersion ?? getDefaultModelVersion();
   return await prisma.ballPrediction.findFirst({
-    where: { matchId, modelVersion },
+    where: { matchId, modelVersion: version },
     orderBy: [
       { innings: "desc" },
       { legalBallNumber: "desc" },
@@ -67,13 +70,19 @@ export interface TickResponse {
     observedAt: Date;
     marketProbA_fair: number;
     marketProbA_raw: number;
-    overround: number;
+    overround: number | null;
     edgeA: number;
   };
   staleness?: {
     stale: boolean;
     secondsDiff: number;
     warning?: string;
+  };
+  provider?: {
+    liveProvider?: string;
+    deliveriesProcessed?: number;
+    nextCursor?: string | null;
+    lastProviderEventId?: string | null;
   };
   message?: string;
 }

@@ -1,0 +1,16 @@
+{
+  "modelVersion": "v42-logreg",
+  "calibrationVersion": "temp-v1",
+  "trainedAt": "2026-03-07T05:49:37.718Z",
+  "method": "temperature",
+  "temperature": 5,
+  "metricsBefore": {
+    "brier": 0.25049418934607126,
+    "logloss": 0.6941527007179724
+  },
+  "metricsAfter": {
+    "brier": 0.24998501219993813,
+    "logloss": 0.6931172943930326
+  },
+  "notes": "Fit on validation split by matchKey; preserves monotonicity"
+}

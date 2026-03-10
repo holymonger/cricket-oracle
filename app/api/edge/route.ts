@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db/prisma";
 import { assertAdminKey } from "@/lib/auth/adminKey";
 import { mapTeamNameToSide } from "@/lib/teams/mapToSide";
 import { fairProbAFromTwoSidedDecimal } from "@/lib/markets/decimal";
+import { getDefaultModelVersion } from "@/lib/model";
 
 type OddsPayload = {
   market: string;
@@ -16,7 +17,8 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const matchId = searchParams.get("matchId");
-  const modelVersion = searchParams.get("modelVersion") ?? "v3-lgbm";
+  // Use DEFAULT_MODEL_VERSION env var, or fall back to v3-lgbm if not set
+  const modelVersion = searchParams.get("modelVersion") ?? getDefaultModelVersion();
   if (!matchId) return NextResponse.json({ error: "matchId required" }, { status: 400 });
 
   const match = await prisma.match.findUnique({ where: { id: matchId } });

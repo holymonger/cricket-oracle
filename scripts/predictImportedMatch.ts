@@ -2,6 +2,10 @@ import { PrismaClient } from "@prisma/client";
 import { computeWinProb } from "@/lib/model";
 import type { MatchState } from "@/lib/model/types";
 import { buildV3Features } from "@/lib/features/buildV3Features";
+import { buildV4Features } from "@/lib/features/buildV4Features";
+import { buildV41Features } from "@/lib/features/buildV41Features";
+import { buildV42Features } from "@/lib/features/buildV42Features";
+import { buildV43Features } from "@/lib/features/buildV43Features";
 
 const prisma = new PrismaClient();
 
@@ -140,20 +144,46 @@ async function predictImportedMatch(
 
     const targetRuns = event.innings === 2 ? firstInningsTarget : undefined;
 
-    const features = buildV3Features(
-      { teamA: match.teamA, teamB: match.teamB },
-      {
-        innings: event.innings as 1 | 2,
-        battingTeam: event.battingTeam as "A" | "B",
-        runs: state.runs,
-        wickets: state.wickets,
-        balls: state.balls,
-        targetRuns,
-        runsThisBall: event.runsTotal,
-        isWicketThisBall: event.isWicket,
-      },
-      rolling
-    );
+    const ballContext = {
+      innings: event.innings as 1 | 2,
+      battingTeam: event.battingTeam as "A" | "B",
+      runs: state.runs,
+      wickets: state.wickets,
+      balls: state.balls,
+      targetRuns,
+      runsThisBall: event.runsTotal,
+      isWicketThisBall: event.isWicket,
+    };
+
+    const features = modelVersion === "v3-lgbm"
+      ? buildV3Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        )
+      : modelVersion === "v41-logreg"
+      ? buildV41Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        )
+      : modelVersion === "v42-logreg"
+      ? buildV42Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        )
+      : modelVersion === "v43-logreg"
+      ? buildV43Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        )
+      : buildV4Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        );
 
     const matchState: MatchState = {
       innings: event.innings as 1 | 2,
@@ -246,7 +276,7 @@ async function main() {
 
   if (!matchId && !sourceMatchId) {
     console.error(
-      "Usage: tsx predictImportedMatch.ts <matchId|sourceMatchId> [--modelVersion v3-lgbm]"
+      "Usage: tsx predictImportedMatch.ts <matchId|sourceMatchId> [--modelVersion v3-lgbm|v4-lgbm|v4-logreg|v41-logreg|v42-logreg|v43-logreg]"
     );
     process.exit(1);
   }

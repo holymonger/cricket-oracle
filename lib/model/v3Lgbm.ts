@@ -1,4 +1,5 @@
 import { MatchState, WinProbResult } from "./types";
+import { calibrateProb } from "./calibration";
 
 /**
  * V3: LightGBM model for per-ball predictions
@@ -11,6 +12,9 @@ import { MatchState, WinProbResult } from "./types";
  * - Player-level statistics
  * - Boundary frequency
  * - Dot ball patterns
+ * 
+ * Note: Output probabilities are automatically calibrated using the trained
+ * calibration artifact (if available).
  */
 export function computeWinProbV3(
   state: MatchState,
@@ -102,11 +106,14 @@ export function computeWinProbV3(
   }
 
   // Convert batting team win% to Team A win%
-  const teamAWinProb =
+  const rawTeamAWinProb =
     state.battingTeam === "A" ? battingWinProb : 1 - battingWinProb;
 
+  // Apply calibration (if artifact exists)
+  const calibratedTeamAWinProb = calibrateProb(rawTeamAWinProb, "v3-lgbm");
+
   return {
-    winProb: teamAWinProb,
+    winProb: calibratedTeamAWinProb,
     modelVersion: "v3-lgbm",
     features: featureMap,
   };

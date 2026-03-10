@@ -20,6 +20,8 @@ import {
   ballEventToLiveDelivery,
   updateLiveCursor,
 } from "@/lib/realtime/replay";
+import { fileSimProviderInstance } from "@/lib/providers/live/fileSimulator/provider";
+import { ballEventsProviderInstance } from "@/lib/providers/live/ballEvents/provider";
 
 const API_BASE = process.env.VERCEL_URL
   ? `https://${process.env.VERCEL_URL}`
@@ -33,11 +35,13 @@ export async function POST(request: NextRequest) {
     const {
       matchId,
       provider = "cricsheet-replay",
+      liveProvider,
       oddsPayload,
       replay,
     } = body as {
       matchId: string;
       provider?: "cricsheet-replay" | "live-feed";
+      liveProvider?: "none" | "file-sim" | "ball-events";
       oddsPayload?: any;
       replay?: { enabled?: boolean };
     };
@@ -63,6 +67,132 @@ export async function POST(request: NextRequest) {
     }
 
     const adminKey = request.headers.get("x-admin-key") || "";
+
+    // Step 0: Handle liveProvider (file-sim, ball-events, etc.)
+    let deliveriesProcessed = 0;
+    let nextCursor: string | null = null;
+    let lastProviderEventId: string | null = null;
+
+    if (liveProvider === "file-sim") {
+      try {
+        // Get current cursor from DB
+        const cursorRow = await prisma.liveProviderCursor.findUnique({
+          where: {
+            matchId_provider: { matchId, provider: "file-sim" },
+          },
+        });
+
+        const currentCursor = cursorRow?.cursor || null;
+
+        // Fetch next delivery from file simulator
+        const fetchResult = await fileSimProviderInstance.fetchNext({
+          matchId,
+          cursor: currentCursor,
+          take: 1,
+        });
+
+        // For each delivery, POST to delivery endpoint
+        for (const delivery of fetchResult.deliveries) {
+          try {
+            const deliveryRes = await fetch(`${API_BASE}/api/realtime/delivery`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-admin-key": adminKey,
+              },
+              body: JSON.stringify(delivery),
+            });
+
+            if (deliveryRes.ok) {
+              deliveriesProcessed++;
+              lastProviderEventId = delivery.providerEventId || null;
+            } else {
+              const err = await deliveryRes.json();
+              console.error("Delivery error:", err);
+            }
+          } catch (err) {
+            console.error("Delivery fetch error:", err);
+          }
+        }
+
+        // Update cursor in DB
+        nextCursor = fetchResult.nextCursor;
+        await prisma.liveProviderCursor.upsert({
+          where: {
+            matchId_provider: { matchId, provider: "file-sim" },
+          },
+          create: {
+            matchId,
+            provider: "file-sim",
+            cursor: nextCursor,
+          },
+          update: {
+            cursor: nextCursor,
+          },
+        });
+      } catch (error: any) {
+        console.error("Live provider error:", error);
+      }
+    } else if (liveProvider === "ball-events") {
+      try {
+        // Get current cursor from DB
+        const cursorRow = await prisma.liveProviderCursor.findUnique({
+          where: {
+            matchId_provider: { matchId, provider: "ball-events" },
+          },
+        });
+
+        const currentCursor = cursorRow?.cursor || null;
+
+        // Fetch next delivery from ball events provider
+        const fetchResult = await ballEventsProviderInstance.fetchNext({
+          matchId,
+          cursor: currentCursor,
+        });
+
+        // For each delivery, POST to delivery endpoint
+        for (const delivery of fetchResult.deliveries) {
+          try {
+            const deliveryRes = await fetch(`${API_BASE}/api/realtime/delivery`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-admin-key": adminKey,
+              },
+              body: JSON.stringify(delivery),
+            });
+
+            if (deliveryRes.ok) {
+              deliveriesProcessed++;
+              lastProviderEventId = delivery.providerEventId || null;
+            } else {
+              const err = await deliveryRes.json();
+              console.error("Delivery error:", err);
+            }
+          } catch (err) {
+            console.error("Delivery fetch error:", err);
+          }
+        }
+
+        // Update cursor in DB
+        nextCursor = fetchResult.nextCursor;
+        await prisma.liveProviderCursor.upsert({
+          where: {
+            matchId_provider: { matchId, provider: "ball-events" },
+          },
+          create: {
+            matchId,
+            provider: "ball-events",
+            cursor: nextCursor,
+          },
+          update: {
+            cursor: nextCursor,
+          },
+        });
+      } catch (error: any) {
+        console.error("Ball-events provider error:", error.message);
+      }
+    }
 
     // Step 1: Update prediction stream (deliver next ball)
     let deliveryResult: any = null;
@@ -131,6 +261,12 @@ export async function POST(request: NextRequest) {
     // Step 3: Load latest outputs from DB
     const latestPrediction = await getLatestBallPrediction(matchId, "v3-lgbm");
     const latestEdge = await getLatestEdgeSignal(matchId);
+    const latestEdgeMarketProbAFair = latestEdge
+      ? ((latestEdge as any).marketProbA_fair ?? (latestEdge as any).marketProbA ?? 0)
+      : 0;
+    const latestEdgeMarketProbARaw = latestEdge
+      ? ((latestEdge as any).marketProbA_raw ?? (latestEdge as any).marketProbA ?? 0)
+      : 0;
 
     // Step 4: Compute staleness
     let staleness = undefined;
@@ -165,13 +301,20 @@ export async function POST(request: NextRequest) {
         ? {
             marketName: latestEdge.marketEvent.market.name,
             observedAt: latestEdge.observedAt,
-            marketProbA_fair: latestEdge.marketProbA_fair,
-            marketProbA_raw: latestEdge.marketProbA_raw,
-            overround: latestEdge.overround,
+            marketProbA_fair: latestEdgeMarketProbAFair,
+            marketProbA_raw: latestEdgeMarketProbARaw,
+            overround: latestEdge.overround ?? null,
             edgeA: latestEdge.edgeA,
           }
         : undefined,
       staleness,
+      // Add provider info
+      provider: {
+        liveProvider,
+        deliveriesProcessed,
+        nextCursor,
+        lastProviderEventId,
+      },
     };
 
     return NextResponse.json(response);

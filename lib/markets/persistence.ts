@@ -64,6 +64,7 @@ export async function persistOddsTicks(
   let ticksUpserted = 0;
 
   // 3. Upsert OddsTicks for each selection
+  const oddsTickDelegate = prisma.oddsTick as any;
   for (const sel of snapshot.selections) {
     const side = mapTeamNameToSide(match, sel.teamName);
     const impliedProbRaw = 1 / sel.oddsDecimal;
@@ -71,31 +72,65 @@ export async function persistOddsTicks(
     if (side === "A") oddsA = sel.oddsDecimal;
     if (side === "B") oddsB = sel.oddsDecimal;
 
-    await prisma.oddsTick.upsert({
-      where: {
-        marketEventId_observedAt_side: {
+    try {
+      await oddsTickDelegate.upsert({
+        where: {
+          marketEventId_observedAt_side: {
+            marketEventId: marketEvent.id,
+            observedAt,
+            side,
+          },
+        },
+        create: {
+          marketEventId: marketEvent.id,
+          observedAt,
+          side,
+          teamName: sel.teamName,
+          oddsDecimal: sel.oddsDecimal,
+          impliedProbRaw,
+          provider: snapshot.marketName,
+          providerEventId: snapshot.externalEventId,
+          sourceJson: sel as any,
+        },
+        update: {
+          oddsDecimal: sel.oddsDecimal,
+          impliedProbRaw,
+          teamName: sel.teamName,
+          sourceJson: sel as any,
+        },
+      });
+    } catch {
+      const existing = await oddsTickDelegate.findFirst({
+        where: {
           marketEventId: marketEvent.id,
           observedAt,
           side,
         },
-      },
-      create: {
-        marketEventId: marketEvent.id,
-        observedAt,
-        side,
-        teamName: sel.teamName,
-        oddsDecimal: sel.oddsDecimal,
-        impliedProbRaw,
-        provider: snapshot.marketName,
-        providerEventId: snapshot.externalEventId,
-        sourceJson: sel as any,
-      },
-      update: {
-        oddsDecimal: sel.oddsDecimal,
-        impliedProbRaw,
-        teamName: sel.teamName,
-      },
-    });
+        select: { id: true },
+      });
+
+      if (existing) {
+        await oddsTickDelegate.update({
+          where: { id: existing.id },
+          data: {
+            oddsDecimal: sel.oddsDecimal,
+            impliedProbRaw,
+            sourceJson: sel as any,
+          },
+        });
+      } else {
+        await oddsTickDelegate.create({
+          data: {
+            marketEventId: marketEvent.id,
+            observedAt,
+            side,
+            oddsDecimal: sel.oddsDecimal,
+            impliedProbRaw,
+            sourceJson: sel as any,
+          },
+        });
+      }
+    }
 
     ticksUpserted++;
   }
@@ -127,24 +162,65 @@ export interface EdgeSignalData {
  * Create or update edge signal
  */
 export async function upsertEdgeSignal(data: EdgeSignalData) {
-  return await prisma.edgeSignal.upsert({
-    where: {
-      matchId_marketEventId_modelVersion_observedAt: {
+  const edgeSignalDelegate = prisma.edgeSignal as any;
+
+  try {
+    return await edgeSignalDelegate.upsert({
+      where: {
+        matchId_marketEventId_modelVersion_observedAt: {
+          matchId: data.matchId,
+          marketEventId: data.marketEventId,
+          modelVersion: data.modelVersion,
+          observedAt: data.observedAt,
+        },
+      },
+      create: {
+        ...data,
+      },
+      update: {
+        teamAWinProb: data.teamAWinProb,
+        marketProbA_raw: data.marketProbA_raw,
+        marketProbA_fair: data.marketProbA_fair,
+        overround: data.overround,
+        edgeA: data.edgeA,
+        notes: data.notes,
+        predictionId: data.predictionId,
+      },
+    });
+  } catch {
+    const existing = await edgeSignalDelegate.findFirst({
+      where: {
         matchId: data.matchId,
         marketEventId: data.marketEventId,
         modelVersion: data.modelVersion,
         observedAt: data.observedAt,
       },
-    },
-    create: data,
-    update: {
+      select: { id: true },
+    });
+
+    const legacyPayload = {
+      matchId: data.matchId,
+      marketEventId: data.marketEventId,
+      modelVersion: data.modelVersion,
+      observedAt: data.observedAt,
+      predictionId: data.predictionId,
       teamAWinProb: data.teamAWinProb,
       marketProbA_raw: data.marketProbA_raw,
       marketProbA_fair: data.marketProbA_fair,
       overround: data.overround,
       edgeA: data.edgeA,
       notes: data.notes,
-      predictionId: data.predictionId,
-    },
-  });
+    };
+
+    if (existing) {
+      return await edgeSignalDelegate.update({
+        where: { id: existing.id },
+        data: legacyPayload,
+      });
+    }
+
+    return await edgeSignalDelegate.create({
+      data: legacyPayload,
+    });
+  }
 }

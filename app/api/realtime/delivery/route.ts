@@ -1,12 +1,91 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import * as fs from "fs";
+import * as path from "path";
 import { assertAdminKey } from "@/lib/auth/adminKey";
 import { prisma } from "@/lib/db/prisma";
 import { mapTeamNameToSide } from "@/lib/teams/mapToSide";
 import { buildV3Features } from "@/lib/features/buildV3Features";
+import { buildV4Features } from "@/lib/features/buildV4Features";
+import { buildV41Features } from "@/lib/features/buildV41Features";
+import { buildV42Features } from "@/lib/features/buildV42Features";
+import { buildV43Features } from "@/lib/features/buildV43Features";
 import { computeWinProb } from "@/lib/model";
 import type { MatchState } from "@/lib/model/types";
+
+/**
+ * Check if v4-logreg artifact exists in the filesystem.
+ * Used for shadow mode to determine if v4 is available for dual-write.
+ */
+function hasV4LogRegArtifact(): boolean {
+  try {
+    const artifactPath = path.join(
+      process.cwd(),
+      "lib",
+      "model",
+      "artifacts",
+      "v4_logreg.json"
+    );
+    return fs.existsSync(artifactPath);
+  } catch {
+    return false;
+  }
+}
+
+function hasV41LogRegArtifact(): boolean {
+  try {
+    const artifactPath = path.join(
+      process.cwd(),
+      "lib",
+      "model",
+      "artifacts",
+      "v41_logreg.json"
+    );
+    return fs.existsSync(artifactPath);
+  } catch {
+    return false;
+  }
+}
+
+function hasV42LogRegArtifact(): boolean {
+  try {
+    const artifactPath = path.join(
+      process.cwd(),
+      "lib",
+      "model",
+      "artifacts",
+      "v42_logreg.json"
+    );
+    return fs.existsSync(artifactPath);
+  } catch {
+    return false;
+  }
+}
+
+function hasV43LogRegArtifact(): boolean {
+  try {
+    const artifactPath = path.join(
+      process.cwd(),
+      "lib",
+      "model",
+      "artifacts",
+      "v43_logreg.json"
+    );
+    return fs.existsSync(artifactPath);
+  } catch {
+    return false;
+  }
+}
+
+const RealtimeModelVersionSchema = z.union([
+  z.literal("v3-lgbm"),
+  z.literal("v4-lgbm"),
+  z.literal("v4-logreg"),
+  z.literal("v41-logreg"),
+  z.literal("v42-logreg"),
+  z.literal("v43-logreg"),
+]);
 
 const DeliveryPayloadSchema = z
   .object({
@@ -36,6 +115,7 @@ const DeliveryPayloadSchema = z
     provider: z.string().min(1).optional(),
     providerEventId: z.string().min(1).optional(),
     occurredAt: z.string().datetime().optional(),
+    modelVersion: RealtimeModelVersionSchema.optional(),
   })
   .refine(
     (data) => {
@@ -68,6 +148,22 @@ export async function POST(request: NextRequest) {
     }
 
     const body = parseResult.data;
+    const modelVersionFromQuery = request.nextUrl.searchParams.get("modelVersion");
+    const modelVersionResult = RealtimeModelVersionSchema.safeParse(
+      modelVersionFromQuery ?? body.modelVersion ?? "v3-lgbm"
+    );
+
+    if (!modelVersionResult.success) {
+      return NextResponse.json(
+        {
+          error: "Invalid modelVersion",
+          allowed: ["v3-lgbm", "v4-lgbm", "v4-logreg", "v41-logreg", "v42-logreg", "v43-logreg"],
+        },
+        { status: 422 }
+      );
+    }
+
+    const selectedModelVersion = modelVersionResult.data;
 
     const match = await prisma.match.findUnique({
       where: { id: body.matchId },
@@ -106,10 +202,25 @@ export async function POST(request: NextRequest) {
       ? (body.wickets as Prisma.InputJsonValue)
       : Prisma.JsonNull;
 
+    // Declare v4 state outside transaction so it's accessible in response
+    let v4Available = false;
+    let v4Prediction: any = null;
+    let v4Features: any = null;
+    let v41Available = false;
+    let v41Prediction: any = null;
+    let v41Features: any = null;
+    let v42Available = false;
+    let v42Prediction: any = null;
+    let v42Features: any = null;
+    let v43Available = false;
+    let v43Prediction: any = null;
+    let v43Features: any = null;
+
     const result = await prisma.$transaction(async (tx) => {
       const existing = await tx.liveBallEvent.findUnique({
         where: {
-          provider_providerEventId: {
+          matchId_provider_providerEventId: {
+            matchId: match.id,
             provider,
             providerEventId,
           },
@@ -262,20 +373,16 @@ export async function POST(request: NextRequest) {
       const targetRuns =
         body.innings === 2 ? (inningsState.targetRuns ?? 0) || undefined : undefined;
 
-      const featureRow = buildV3Features(
-        { teamA: match.teamA, teamB: match.teamB },
-        {
-          innings: body.innings,
-          battingTeam,
-          runs: nextRuns,
-          wickets: nextWickets,
-          balls: nextBalls,
-          targetRuns,
-          runsThisBall: runsTotal,
-          isWicketThisBall,
-        },
-        rolling
-      );
+      const ballContext = {
+        innings: body.innings,
+        battingTeam,
+        runs: nextRuns,
+        wickets: nextWickets,
+        balls: nextBalls,
+        targetRuns,
+        runsThisBall: runsTotal,
+        isWicketThisBall,
+      };
 
       const matchState: MatchState = {
         innings: body.innings,
@@ -286,7 +393,98 @@ export async function POST(request: NextRequest) {
         targetRuns: targetRuns ?? null,
       };
 
-      const prediction = computeWinProb(matchState, "v3-lgbm", featureRow);
+      // Build v3 features and prediction (always)
+      const v3Features = buildV3Features(
+        { teamA: match.teamA, teamB: match.teamB },
+        ballContext,
+        rolling
+      );
+      const v3Prediction = computeWinProb(matchState, "v3-lgbm", v3Features);
+
+      // Shadow mode: also build v4 predictions if artifact exists
+      // Update outer scope v4 state
+      v4Available = hasV4LogRegArtifact();
+      if (v4Available) {
+        v4Features = buildV4Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        );
+        try {
+          v4Prediction = computeWinProb(matchState, "v4-logreg", v4Features);
+        } catch (e) {
+          // If v4 computation fails, just skip it
+          console.warn("Warning: v4-logreg computation failed, skipping shadow prediction:", e);
+          v4Prediction = null;
+        }
+      }
+
+      // Optional v4.1 path for direct selection
+      v41Available = hasV41LogRegArtifact();
+      if (v41Available) {
+        v41Features = buildV41Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        );
+        try {
+          v41Prediction = computeWinProb(matchState, "v41-logreg", v41Features);
+        } catch (e) {
+          console.warn("Warning: v41-logreg computation failed, using fallback prediction:", e);
+          v41Prediction = null;
+        }
+      }
+
+      v42Available = hasV42LogRegArtifact();
+      if (v42Available) {
+        v42Features = buildV42Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        );
+        try {
+          v42Prediction = computeWinProb(matchState, "v42-logreg", v42Features);
+        } catch (e) {
+          console.warn("Warning: v42-logreg computation failed, using fallback prediction:", e);
+          v42Prediction = null;
+        }
+      }
+
+      v43Available = hasV43LogRegArtifact();
+      if (v43Available) {
+        v43Features = buildV43Features(
+          { teamA: match.teamA, teamB: match.teamB },
+          ballContext,
+          rolling
+        );
+        try {
+          v43Prediction = computeWinProb(matchState, "v43-logreg", v43Features);
+        } catch (e) {
+          console.warn("Warning: v43-logreg computation failed, using fallback prediction:", e);
+          v43Prediction = null;
+        }
+      }
+
+      // Use selected model for response (from query param or body), or fall back to v3
+      const selectedModelVersion = modelVersionResult.data;
+      const responseFeatures = selectedModelVersion === "v43-logreg"
+        ? (v43Features ?? v3Features)
+        : selectedModelVersion === "v42-logreg"
+        ? (v42Features ?? v3Features)
+        : selectedModelVersion === "v41-logreg"
+        ? (v41Features ?? v3Features)
+        : selectedModelVersion === "v4-logreg"
+        ? (v4Features ?? v3Features)
+        : v3Features;
+      const responsePrediction = selectedModelVersion === "v43-logreg"
+        ? (v43Prediction ?? v3Prediction)
+        : selectedModelVersion === "v42-logreg"
+        ? (v42Prediction ?? v3Prediction)
+        : selectedModelVersion === "v41-logreg"
+        ? (v41Prediction ?? v3Prediction)
+        : selectedModelVersion === "v4-logreg"
+        ? (v4Prediction ?? v3Prediction)
+        : v3Prediction;
 
       await tx.liveBallEvent.create({
         data: {
@@ -326,6 +524,8 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Shadow mode: write BOTH v3 and v4 predictions (if v4 available)
+      // Start with v3
       await tx.ballPrediction.upsert({
         where: {
           matchId_innings_legalBallNumber_modelVersion: {
@@ -340,20 +540,73 @@ export async function POST(request: NextRequest) {
           innings: body.innings,
           legalBallNumber,
           modelVersion: "v3-lgbm",
-          teamAWinProb: prediction.winProb,
-          featuresJson: featureRow,
+          teamAWinProb: v3Prediction.winProb,
+          featuresJson: v3Features,
         },
         update: {
-          teamAWinProb: prediction.winProb,
-          featuresJson: featureRow,
+          teamAWinProb: v3Prediction.winProb,
+          featuresJson: v3Features,
         },
       });
+
+      // Also write v4 if available.
+      if (v4Prediction && v4Features) {
+        await tx.ballPrediction.upsert({
+          where: {
+            matchId_innings_legalBallNumber_modelVersion: {
+              matchId: body.matchId,
+              innings: body.innings,
+              legalBallNumber,
+              modelVersion: "v4-logreg",
+            },
+          },
+          create: {
+            matchId: body.matchId,
+            innings: body.innings,
+            legalBallNumber,
+            modelVersion: "v4-logreg",
+            teamAWinProb: v4Prediction.winProb,
+            featuresJson: v4Features,
+          },
+          update: {
+            teamAWinProb: v4Prediction.winProb,
+            featuresJson: v4Features,
+          },
+        });
+      }
+
+      // Persist selected model prediction for direct v41/v42/v43 usage.
+      if (selectedModelVersion !== "v3-lgbm" && selectedModelVersion !== "v4-logreg") {
+        await tx.ballPrediction.upsert({
+          where: {
+            matchId_innings_legalBallNumber_modelVersion: {
+              matchId: body.matchId,
+              innings: body.innings,
+              legalBallNumber,
+              modelVersion: selectedModelVersion,
+            },
+          },
+          create: {
+            matchId: body.matchId,
+            innings: body.innings,
+            legalBallNumber,
+            modelVersion: selectedModelVersion,
+            teamAWinProb: responsePrediction.winProb,
+            featuresJson: responseFeatures,
+          },
+          update: {
+            teamAWinProb: responsePrediction.winProb,
+            featuresJson: responseFeatures,
+          },
+        });
+      }
 
       return {
         duplicate: false,
         isLegal: true,
+        modelVersion: selectedModelVersion,
         legalBallNumber,
-        teamAWinProb: prediction.winProb,
+        teamAWinProb: responsePrediction.winProb,
       };
     });
 
@@ -363,6 +616,12 @@ export async function POST(request: NextRequest) {
       innings: body.innings,
       over: body.over,
       ballInOver: body.ballInOver,
+      modelVersion: selectedModelVersion,
+      shadowMode: {
+        v3Written: true,
+        v4Written: v4Available && v4Prediction !== null,
+        v4Available,
+      },
       ...result,
     });
   } catch (error: any) {

@@ -1,0 +1,7 @@
+v5-lgbm Evaluation Report
+=========================
+Brier:    0.158022
+LogLoss:  0.470488
+Acc@0.5:  75.43%
+Trees:    69
+Features: 64

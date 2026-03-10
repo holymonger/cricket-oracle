@@ -105,7 +105,8 @@ export async function POST(request: NextRequest) {
         // Store in LiveBallEvent (upsert for idempotency)
         await prisma.liveBallEvent.upsert({
           where: {
-            provider_providerEventId: {
+            matchId_provider_providerEventId: {
+              matchId: event.matchId,
               provider: event.provider,
               providerEventId: event.providerEventId,
             },

@@ -23,35 +23,22 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const { searchParams } = new URL(request.url);
+    const matchIdFilter = searchParams.get("matchId") ?? undefined;
+    const limit = Math.min(200, parseInt(searchParams.get("limit") ?? "100", 10));
+
     // Get recent edge signals with related data
     const edgeSignals = await prisma.edgeSignal.findMany({
-      take: 100,
+      where: matchIdFilter ? { matchId: matchIdFilter } : undefined,
+      take: limit,
       orderBy: { observedAt: "desc" },
       include: {
-        match: {
-          select: {
-            id: true,
-            teamA: true,
-            teamB: true,
-          },
-        },
+        match: { select: { id: true, teamA: true, teamB: true } },
         marketEvent: {
           include: {
-            market: {
-              select: {
-                name: true,
-              },
-            },
-            oddsTicks: {
-              where: {
-                observedAt: {
-                  // Get odds from same observation window
-                  gte: new Date(Date.now() - 60000), // last minute
-                },
-              },
-              orderBy: { observedAt: "desc" },
-              take: 2,
-            },
+            market: { select: { name: true } },
+            // Get the two most recent ticks (one per side) for display
+            oddsTicks: { orderBy: { observedAt: "desc" }, take: 4 },
           },
         },
       },
@@ -59,14 +46,9 @@ export async function GET(request: NextRequest) {
 
     // Transform to UI format
     const signals = edgeSignals.map((signal) => {
+      // Find best (most recent) odds per side
       const oddsA = signal.marketEvent.oddsTicks.find((t) => t.side === "A");
       const oddsB = signal.marketEvent.oddsTicks.find((t) => t.side === "B");
-
-      // Check if stale (>10s difference between prediction and odds)
-      const staleness = Math.abs(
-        signal.observedAt.getTime() - signal.createdAt.getTime()
-      ) / 1000;
-      const isStale = staleness > 10;
 
       return {
         id: signal.id,
@@ -75,14 +57,16 @@ export async function GET(request: NextRequest) {
         teamB: signal.match.teamB,
         market: signal.marketEvent.market.name,
         observedAt: signal.observedAt.toISOString(),
-        oddsA: oddsA?.oddsDecimal || 0,
-        oddsB: oddsB?.oddsDecimal || 0,
+        oddsA: oddsA?.oddsDecimal ?? 0,
+        oddsB: oddsB?.oddsDecimal ?? 0,
         marketProbA: signal.marketProbA_fair,
+        marketProbA_raw: signal.marketProbA_raw,
         teamAWinProb: signal.teamAWinProb,
         edgeA: signal.edgeA,
         overround: signal.overround,
+        isStale: signal.isStale,
+        stalenessSeconds: signal.stalenessSeconds,
         notes: signal.notes,
-        isStale,
       };
     });
 

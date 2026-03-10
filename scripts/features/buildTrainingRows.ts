@@ -3,8 +3,11 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { buildV3Features } from "@/lib/features/buildV3Features";
+import { buildV4Features } from "@/lib/features/buildV4Features";
 
 const prisma = new PrismaClient();
+
+export type FeatureVersion = "v3" | "v4";
 
 /**
  * Single training row (one legal ball)
@@ -51,6 +54,17 @@ export interface TrainingRow {
   wktsLast12: number;
   dotsLast12: number;
   boundariesLast12: number;
+
+  // V4-only features (included when featureVersion=v4)
+  isChase?: number;
+  isPowerplay?: number;
+  isDeath?: number;
+  wicketsInHand?: number;
+  rrDelta?: number;
+  rrLast12?: number;
+  dotRateLast12?: number;
+  boundaryRateLast12?: number;
+  ballsRemainingFrac?: number;
   
   // Ball outcome
   runsThisBallTotal: number; // Total runs (bat + extras) on this ball
@@ -107,6 +121,17 @@ const FEATURE_DOCUMENTATION = {
     dotsLast12: "Total dot balls (0 runs) in last 12 legal balls",
     boundariesLast12: "Total boundary balls (4 or 6 runs) in last 12 legal balls",
   },
+  v4Features: {
+    isChase: "1 if innings == 2, else 0",
+    isPowerplay: "1 if balls <= 36, else 0",
+    isDeath: "1 if balls > 90, else 0",
+    wicketsInHand: "10 - wickets",
+    rrDelta: "In innings 2: rrr - rr; in innings 1: 0",
+    rrLast12: "(runsLast12 / 12) * 6",
+    dotRateLast12: "dotsLast12 / 12",
+    boundaryRateLast12: "boundariesLast12 / 12",
+    ballsRemainingFrac: "ballsRemaining / 120",
+  },
   ballOutcome: {
     runsThisBallTotal: "Total runs scored on this ball (bat + extras: wides, no-balls, byes, leg-byes)",
     isWicketThisBall: "True if a wicket fell on this ball",
@@ -128,8 +153,8 @@ function computeFileHash(filePath: string): string {
 /**
  * Write feature documentation
  */
-function writeFeatureDocumentation(outputDir: string): string {
-  const docPath = path.join(outputDir, "feature_documentation.json");
+function writeFeatureDocumentation(outputDir: string, featureVersion: FeatureVersion): string {
+  const docPath = path.join(outputDir, `feature_documentation_${featureVersion}.json`);
   fs.writeFileSync(
     docPath,
     JSON.stringify(FEATURE_DOCUMENTATION, null, 2),
@@ -138,10 +163,18 @@ function writeFeatureDocumentation(outputDir: string): string {
   return docPath;
 }
 
+function parseFeatureVersionArg(): FeatureVersion {
+  const idx = process.argv.findIndex((arg) => arg === "--featureVersion");
+  const raw = idx >= 0 ? process.argv[idx + 1] : undefined;
+  if (!raw) return "v4";
+  if (raw === "v3" || raw === "v4") return raw;
+  throw new Error(`Invalid --featureVersion value: ${raw}. Use 'v3' or 'v4'.`);
+}
+
 /**
  * Build training rows from a single match
  */
-async function buildRowsForMatch(matchId: string): Promise<TrainingRow[]> {
+async function buildRowsForMatch(matchId: string, featureVersion: FeatureVersion): Promise<TrainingRow[]> {
   // Fetch match
   const match = await prisma.match.findUnique({
     where: { id: matchId },
@@ -282,29 +315,31 @@ async function buildRowsForMatch(matchId: string): Promise<TrainingRow[]> {
         ? runsByInnings[1] + 1
         : undefined;
 
-    const featureRow = buildV3Features(
-      { teamA: match.teamA, teamB: match.teamB },
-      {
-        innings: inningsNum as 1 | 2,
-        battingTeam: event.battingTeam as "A" | "B",
-        runs: currentRuns,
-        wickets: currentWkts,
-        balls: currentBalls,
-        targetRuns,
-        runsThisBall: event.runsTotal,
-        isWicketThisBall: event.isWicket,
-      },
-      {
-        runsLast6,
-        wktsLast6,
-        dotsLast6,
-        boundariesLast6,
-        runsLast12,
-        wktsLast12,
-        dotsLast12,
-        boundariesLast12,
-      }
-    );
+    const ballContext = {
+      innings: inningsNum as 1 | 2,
+      battingTeam: event.battingTeam as "A" | "B",
+      runs: currentRuns,
+      wickets: currentWkts,
+      balls: currentBalls,
+      targetRuns,
+      runsThisBall: event.runsTotal,
+      isWicketThisBall: event.isWicket,
+    };
+
+    const rolling = {
+      runsLast6,
+      wktsLast6,
+      dotsLast6,
+      boundariesLast6,
+      runsLast12,
+      wktsLast12,
+      dotsLast12,
+      boundariesLast12,
+    };
+
+    const featureRow = featureVersion === "v4"
+      ? buildV4Features({ teamA: match.teamA, teamB: match.teamB }, ballContext, rolling)
+      : buildV3Features({ teamA: match.teamA, teamB: match.teamB }, ballContext, rolling);
 
     // Get player details
     const striker = playerMap.get(event.strikerId);
@@ -358,6 +393,19 @@ async function buildRowsForMatch(matchId: string): Promise<TrainingRow[]> {
       y: label,
     };
 
+    if (featureVersion === "v4") {
+      const v4FeatureRow = featureRow as Record<string, number>;
+      row.isChase = Number(v4FeatureRow.isChase ?? 0);
+      row.isPowerplay = Number(v4FeatureRow.isPowerplay ?? 0);
+      row.isDeath = Number(v4FeatureRow.isDeath ?? 0);
+      row.wicketsInHand = Number(v4FeatureRow.wicketsInHand ?? 0);
+      row.rrDelta = Number(v4FeatureRow.rrDelta ?? 0);
+      row.rrLast12 = Number(v4FeatureRow.rrLast12 ?? 0);
+      row.dotRateLast12 = Number(v4FeatureRow.dotRateLast12 ?? 0);
+      row.boundaryRateLast12 = Number(v4FeatureRow.boundaryRateLast12 ?? 0);
+      row.ballsRemainingFrac = Number(v4FeatureRow.ballsRemainingFrac ?? 0);
+    }
+
     rows.push(row);
   }
 
@@ -373,7 +421,9 @@ export async function exportTrainingData(): Promise<{
   totalRows: number;
   skippedMatches: number;
 }> {
+  const featureVersion = parseFeatureVersionArg();
   console.log("🏏 Exporting training data from imported matches...\n");
+  console.log(`Feature version: ${featureVersion}`);
 
   // Create output directory
   const outputDir = path.join(process.cwd(), "training");
@@ -381,9 +431,9 @@ export async function exportTrainingData(): Promise<{
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  const outputPath = path.join(outputDir, "training_rows.jsonl");
-  const summaryPath = path.join(outputDir, "export_summary.json");
-  const samplePath = path.join(outputDir, "validation_sample.json");
+  const outputPath = path.join(outputDir, `training_rows_${featureVersion}.jsonl`);
+  const summaryPath = path.join(outputDir, `export_summary_${featureVersion}.json`);
+  const samplePath = path.join(outputDir, `validation_sample_${featureVersion}.json`);
   const writeStream = fs.createWriteStream(outputPath);
 
   // Fetch all completed imported matches
@@ -407,7 +457,7 @@ export async function exportTrainingData(): Promise<{
   for (let i = 0; i < matches.length; i++) {
     const match = matches[i];
     try {
-      const rows = await buildRowsForMatch(match.id);
+      const rows = await buildRowsForMatch(match.id, featureVersion);
       
       if (rows.length === 0) {
         skipped++;
@@ -462,7 +512,7 @@ export async function exportTrainingData(): Promise<{
 
   console.log(`\n📖 Generating feature documentation...`);
   // Write feature documentation
-  const docPath = writeFeatureDocumentation(outputDir);
+  const docPath = writeFeatureDocumentation(outputDir, featureVersion);
   console.log(`✓ Feature documentation written to ${docPath}`);
 
   console.log(`\n🔐 Computing checksums...`);
@@ -479,6 +529,7 @@ export async function exportTrainingData(): Promise<{
   // Write summary (must come before final checksum)
   const summary = {
     exportedAt: new Date().toISOString(),
+    featureVersion,
     totalMatches: matches.length,
     completedMatches: matches.length - skipped,
     totalRows,

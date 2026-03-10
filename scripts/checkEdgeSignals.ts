@@ -43,20 +43,27 @@ async function checkEdgeSignals() {
 
     const oddsA = signal.marketEvent.oddsTicks.find((t) => t.side === "A");
     const oddsB = signal.marketEvent.oddsTicks.find((t) => t.side === "B");
+    const marketProbARaw =
+      (signal as any).marketProbA_raw ?? (signal as any).marketProbA ?? 0;
+    const marketProbAFair =
+      (signal as any).marketProbA_fair ?? (signal as any).marketProbA ?? 0;
+    const overround = signal.overround ?? 1;
 
     if (oddsA && oddsB) {
-      console.log(`Odds: ${oddsA.teamName} ${oddsA.oddsDecimal} | ${oddsB.teamName} ${oddsB.oddsDecimal}`);
+      const oddsALabel = (oddsA as any).teamName ?? signal.match.teamA;
+      const oddsBLabel = (oddsB as any).teamName ?? signal.match.teamB;
+      console.log(`Odds: ${oddsALabel} ${oddsA.oddsDecimal} | ${oddsBLabel} ${oddsB.oddsDecimal}`);
     }
 
     console.log(`Model Prob A: ${(signal.teamAWinProb * 100).toFixed(2)}%`);
     console.log(
-      `Market Prob A (raw): ${(signal.marketProbA_raw * 100).toFixed(2)}%`
+      `Market Prob A (raw): ${(marketProbARaw * 100).toFixed(2)}%`
     );
     console.log(
-      `Market Prob A (fair): ${(signal.marketProbA_fair * 100).toFixed(2)}%`
+      `Market Prob A (fair): ${(marketProbAFair * 100).toFixed(2)}%`
     );
     console.log(
-      `Overround: ${((signal.overround - 1) * 100).toFixed(2)}%`
+      `Overround: ${((overround - 1) * 100).toFixed(2)}%`
     );
     console.log(`Edge A: ${(signal.edgeA * 100).toFixed(2)}%`);
 

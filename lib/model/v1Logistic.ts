@@ -71,18 +71,25 @@ export function computeWinProbV1(state: MatchState): WinProbResult {
     }
   } else {
     // ===== Innings 1: No target, project score =====
-    const crrIngs1 = state.balls > 0 ? (state.runs * 6) / state.balls : 5.0; // assume 5 rpo if no balls yet
-    const projectedRuns = state.runs + (ballsRemaining * crrIngs1) / 6;
+    const wicketsInHand = Math.max(0, 10 - state.wickets);
+    const crrIngs1 = state.balls > 0 ? (state.runs * 6) / state.balls : 5.5;
+
+    // Wicket-adjusted future run rate: each wicket lost reduces expected future scoring
+    const wicketDecayFactor = 1 - (10 - wicketsInHand) * 0.035;
+    const projectedFutureRR = Math.max(3.5, crrIngs1 * wicketDecayFactor);
+    const projectedRuns = state.runs + (ballsRemaining * projectedFutureRR) / 6;
 
     features.currentRR = crrIngs1;
     features.projectedScore = projectedRuns;
+    features.projectedFutureRR = projectedFutureRR;
 
-    // Map projected score to batting team win% via logistic around T20 median (~160)
-    const midline = 160;
-    const scale = 20;
+    // Phase-adjusted midline and scale: uncertainty narrows as the innings progresses
+    const phaseFactor = state.balls / ballsTotal;
+    const midline = 148 + 18 * phaseFactor; // ~148 at over 0, ~166 at over 20
+    const scale = Math.max(8, 18 - 8 * phaseFactor); // tighter spread late in innings
+
     const z = (projectedRuns - midline) / scale;
     battingWinProb = sigmoid(z);
-    // Apply confidence clipping for model output
     if (battingWinProb < 0.01) battingWinProb = 0.01;
     if (battingWinProb > 0.99) battingWinProb = 0.99;
   }

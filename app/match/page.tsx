@@ -377,11 +377,22 @@ export default function MatchPage() {
       } else if (res.status === 500 && data.error?.includes("ADMIN_KEY")) {
         setAdminKeyError("Server error: ADMIN_KEY not configured on server. Contact admin.");
       } else if (data.snapshots) {
-        // Re-compute winProbs for display
-        const withWinProbs = data.snapshots.map((snap: MatchSnapshot, idx: number) => ({
-          snapshot: snap,
-          winProb: snapshots[idx]?.winProb ?? 0.5,
-        }));
+        // Re-compute winProb for each snapshot from the API — avoids stale closure
+        const withWinProbs = await Promise.all(
+          (data.snapshots as MatchSnapshot[]).map(async (snap) => {
+            try {
+              const r = await fetch("/api/winprob", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(snap.state),
+              });
+              const prob = await r.json();
+              return { snapshot: snap, winProb: typeof prob.winProb === "number" ? prob.winProb : 0.5 };
+            } catch {
+              return { snapshot: snap, winProb: 0.5 };
+            }
+          })
+        );
         setSnapshots(withWinProbs);
       }
     } catch (e) {
@@ -435,6 +446,24 @@ export default function MatchPage() {
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-semibold">Cricket Oracle (v0)</h1>
         <div className="flex gap-3">
+          <a
+            href="/live"
+            className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded text-sm font-medium transition"
+          >
+            🟢 Live
+          </a>
+          <a
+            href="/pre-match"
+            className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded text-sm font-medium transition"
+          >
+            🔮 Pre-Match
+          </a>
+          <a
+            href="/markets"
+            className="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded text-sm font-medium transition"
+          >
+            📊 Edge Signals
+          </a>
           <a
             href="/matches"
             className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-medium transition"

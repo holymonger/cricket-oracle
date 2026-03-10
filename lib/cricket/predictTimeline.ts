@@ -4,6 +4,7 @@ import {
   MatchInfo,
   BallEventRecord,
 } from "./stateFromBalls";
+import { computeWinProbV1 } from "@/lib/model/v1Logistic";
 
 /**
  * Single point on the win probability timeline
@@ -57,60 +58,22 @@ export interface PredictTimelineResult {
   summary: TimelineSummary;
 }
 
-/**
- * Simple mock computeWinProb for testing
- * In production, this would be imported from model/v1Logistic.ts or similar
- */
-function mockComputeWinProb(state: DerivedBallState, modelVersion: string): number {
-  // Simple heuristic: Team A win% based on runs, wickets, balls
-  const overs = Math.floor(state.balls / 6);
-  const ballsInOver = state.balls % 6;
-  const runRate = state.balls > 0 ? (state.runs / state.balls) * 6 : 0;
-
-  // Base score
-  let winProb = 50;
-
-  // For innings 1: higher runs = higher win%
-  if (state.innings === 1) {
-    if (runRate > 9) winProb += 20;
-    else if (runRate > 8) winProb += 15;
-    else if (runRate > 7) winProb += 10;
-    else if (runRate > 6) winProb += 5;
-    else if (runRate < 5) winProb -= 10;
-
-    // Wickets reduce win%
-    winProb -= state.wickets * 5;
-  } else {
-    // Innings 2: compare vs target
-    if (state.targetRuns) {
-      const runsRemaining = state.targetRuns - state.runs;
-      const ballsRemaining = 120 - state.balls;
-      const requiredRunRate =
-        ballsRemaining > 0 ? (runsRemaining / ballsRemaining) * 6 : 0;
-
-      if (runsRemaining <= 0) {
-        winProb = 95;
-      } else if (requiredRunRate < 6) {
-        winProb = 70;
-      } else if (requiredRunRate < 8) {
-        winProb = 50;
-      } else if (requiredRunRate < 10) {
-        winProb = 30;
-      } else {
-        winProb = 10;
-      }
-
-      // Wickets make it harder
-      winProb -= state.wickets * 5;
-    }
-  }
-
-  return Math.max(0, Math.min(100, winProb));
+function defaultComputeWinProb(state: DerivedBallState): number {
+  const result = computeWinProbV1({
+    innings: state.innings,
+    runs: state.runs,
+    wickets: state.wickets,
+    balls: state.balls,
+    targetRuns: state.targetRuns ?? null,
+    battingTeam: state.battingTeam,
+  });
+  // timeline expects 0–100
+  return result.winProb * 100;
 }
 
 /**
- * Build a win probability timeline from ball state items
- * Optionally call a real model's computeWinProb
+ * Build a win probability timeline from ball state items.
+ * Uses v1 model by default; pass computeWinProbFn to override.
  */
 export async function predictWinProbTimeline(
   match: MatchInfo,
@@ -118,7 +81,9 @@ export async function predictWinProbTimeline(
   modelVersion: string = "v1",
   computeWinProbFn?: (state: DerivedBallState, version: string) => number
 ): Promise<PredictTimelineResult> {
-  const computeWinProb = computeWinProbFn || mockComputeWinProb;
+  const computeWinProb = computeWinProbFn
+    ? computeWinProbFn
+    : (s: DerivedBallState) => defaultComputeWinProb(s);
 
   const timeline: TimelinePoint[] = [];
   let ballNumberInMatch = 0;

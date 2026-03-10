@@ -27,6 +27,10 @@ model Match {
   winnerTeam       String?   // "A" | "B" | null
   tossWinnerTeam   String?   // "A" | "B" | null
   tossDecision     String?   // "bat" | "field"
+  innings1Runs     Int?      // total runs scored in innings 1
+  innings2Runs     Int?      // total runs scored in innings 2
+  innings1Wickets  Int?      // wickets fallen in innings 1
+  innings2Wickets  Int?      // wickets fallen in innings 2
 
   snapshots        MatchStateSnapshot[]
   matchPlayers     MatchPlayer[]
@@ -35,8 +39,10 @@ model Match {
   liveCursors      LiveCursor[]
   liveBallEvents   LiveBallEvent[]
   liveInningsStates LiveInningsState[]
+  liveMatchControl LiveMatchControl?
   marketEvents     MarketEvent[]
   edgeSignals      EdgeSignal[]
+  paperBets        PaperBet[]
 
   @@unique([source, sourceMatchId])
   @@map("matches")
@@ -202,7 +208,7 @@ model LiveBallEvent {
   occurredAt        DateTime?
   createdAt         DateTime  @default(now())
 
-  @@unique([provider, providerEventId])
+  @@unique([matchId, provider, providerEventId])
   @@index([matchId, innings, over, ballInOver])
   @@map("live_ball_events")
 }
@@ -251,10 +257,53 @@ model MarketEvent {
 
   oddsTicks             OddsTick[]
   edgeSignals           EdgeSignal[]
+  paperBets             PaperBet[]
 
   @@unique([marketId, externalEventId])
   @@index([matchId])
   @@map("market_events")
+}
+
+model PaperAccount {
+  id              String    @id @default(cuid())
+  name            String    @unique
+  currency        String    @default("USD")
+  startingBalance Float     @default(1000)
+  createdAt       DateTime  @default(now())
+
+  bets            PaperBet[]
+
+  @@map("paper_accounts")
+}
+
+model PaperBet {
+  id            String      @id @default(cuid())
+  accountId     String
+  account       PaperAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  matchId       String
+  match         Match       @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  marketEventId String
+  marketEvent   MarketEvent @relation(fields: [marketEventId], references: [id], onDelete: Cascade)
+
+  placedAt      DateTime
+  observedAt    DateTime
+  side          String      // "A" | "B"
+  stake         Float
+  oddsDecimal   Float
+  impliedProb   Float?
+  modelProbA    Float
+  marketProbA   Float
+  edgeA         Float
+  ruleVersion   String      // e.g. "edge-v1"
+  status        String      // "open" | "settled" | "void"
+  settledAt     DateTime?
+  result        String?     // "win" | "loss" | "push"
+  pnl           Float?      // net PnL excluding returned stake
+  createdAt     DateTime    @default(now())
+
+  @@index([matchId, status])
+  @@index([accountId, status])
+  @@map("paper_bets")
 }
 
 model OddsTick {
@@ -296,14 +345,42 @@ model EdgeSignal {
   overround         Float       // total overround (probA_raw + probB_raw)
   edgeA             Float       // teamAWinProb - marketProbA_fair (positive = model favors A)
   
+  isStale           Boolean     @default(false) // true if prediction time differs >10s from odds time
+  stalenessSeconds  Float       @default(0)     // abs diff between prediction.createdAt and observedAt
   notes             String?     // e.g. "one-sided market", "stale prediction"
   createdAt         DateTime    @default(now())
 
   @@unique([matchId, marketEventId, modelVersion, observedAt])
   @@index([matchId, observedAt])
   @@index([edgeA])
+  @@index([isStale])
   @@index([observedAt])
   @@map("edge_signals")
+}
+
+model LiveMatchControl {
+  id          String    @id @default(cuid())
+  matchId     String    @unique
+  match       Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  status      String    @default("running")  // "running" | "paused" | "error"
+  lastError   String?
+  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime  @default(now())
+
+  @@index([status])
+  @@map("live_match_control")
+}
+
+model LiveProviderCursor {
+  id        String    @id @default(cuid())
+  matchId   String
+  provider  String
+  cursor    String?   // provider-specific cursor (e.g., array index for file-sim)
+  updatedAt DateTime  @updatedAt
+
+  @@unique([matchId, provider])
+  @@index([matchId])
+  @@map("live_provider_cursors")
 }
 
 

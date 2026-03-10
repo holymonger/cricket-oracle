@@ -3,7 +3,10 @@
 /**
  * CLI script to export training data from imported Cricsheet matches
  * 
- * Usage: tsx scripts/exportTrainingData.ts
+ * Usage:
+ *   tsx scripts/exportTrainingData.ts
+ *   tsx scripts/exportTrainingData.ts --featureVersion v3
+ *   tsx scripts/exportTrainingData.ts --featureVersion v4
  */
 
 import * as fs from "fs";

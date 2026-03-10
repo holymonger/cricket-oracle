@@ -25,6 +25,12 @@ interface TickData {
     secondsDiff: number;
     warning?: string;
   };
+  provider?: {
+    liveProvider?: string;
+    deliveriesProcessed?: number;
+    nextCursor?: string | null;
+    lastProviderEventId?: string | null;
+  };
 }
 
 export default function RealtimePage() {
@@ -34,6 +40,7 @@ export default function RealtimePage() {
     "cmmc4dc4p00002v09lszovaw5"
   );
   const [provider, setProvider] = useState<string>("cricsheet-replay");
+  const [liveProvider, setLiveProvider] = useState<string>("none");
   const [edgeThreshold, setEdgeThreshold] = useState<number>(0.03);
   const [autoTicking, setAutoTicking] = useState<boolean>(false);
   const [tickLoading, setTickLoading] = useState<boolean>(false);
@@ -92,6 +99,7 @@ export default function RealtimePage() {
         body: JSON.stringify({
           matchId,
           provider,
+          liveProvider: liveProvider !== "none" ? liveProvider : undefined,
         }),
       });
 
@@ -199,6 +207,19 @@ export default function RealtimePage() {
           </div>
 
           <div>
+            <label className="block text-sm font-semibold mb-1">Live Provider</label>
+            <select
+              value={liveProvider}
+              onChange={(e) => setLiveProvider(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded"
+            >
+              <option value="none">None (Cricsheet only)</option>
+              <option value="file-sim">File Simulator</option>
+              <option value="ball-events">Ball Events (Imported)</option>
+            </select>
+          </div>
+
+          <div>
             <label className="block text-sm font-semibold mb-1">
               Edge Threshold
             </label>
@@ -243,9 +264,27 @@ export default function RealtimePage() {
         </button>
 
         <button
-          onClick={() => {
-            setTickCount(0);
-            setLastTick(null);
+          onClick={async () => {
+            if (!adminKey || !matchId) return;
+            try {
+              const res = await fetch("/api/realtime/reset", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "x-admin-key": adminKey,
+                },
+                body: JSON.stringify({ matchId }),
+              });
+              if (res.ok) {
+                setTickCount(0);
+                setLastTick(null);
+                setError("✓ Realtime data reset");
+              } else {
+                setError("Failed to reset");
+              }
+            } catch (err: any) {
+              setError(err.message);
+            }
           }}
           className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
         >
@@ -257,6 +296,31 @@ export default function RealtimePage() {
       {error && (
         <div className="bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded">
           ⚠️ {error}
+        </div>
+      )}
+
+      {/* Provider Status */}
+      {lastTick?.provider && (
+        <div className="bg-indigo-50 border border-indigo-300 rounded p-4">
+          <h3 className="font-semibold mb-2">📡 Provider Status</h3>
+          <div className="grid grid-cols-4 gap-3 text-sm">
+            <div>
+              <span className="text-gray-600">Provider:</span>{" "}
+              <span className="font-semibold">{lastTick.provider.liveProvider || "none"}</span>
+            </div>
+            <div>
+              <span className="text-gray-600">Deliveries:</span>{" "}
+              <span className="font-semibold">{lastTick.provider.deliveriesProcessed || 0}</span>
+            </div>
+            <div>
+              <span className="text-gray-600">Cursor:</span>{" "}
+              <span className="font-mono text-xs">{lastTick.provider.nextCursor || "—"}</span>
+            </div>
+            <div>
+              <span className="text-gray-600">Last Event:</span>{" "}
+              <span className="font-mono text-xs">{lastTick.provider.lastProviderEventId ? lastTick.provider.lastProviderEventId.substring(0, 20) + "..." : "—"}</span>
+            </div>
+          </div>
         </div>
       )}
 

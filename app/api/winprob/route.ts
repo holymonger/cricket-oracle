@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { RateLimitExceededError, rateLimitOrThrow } from "@/lib/auth/rateLimit";
-import { computeWinProb } from "@/lib/model";
+import { computeWinProb, getDefaultModelVersion } from "@/lib/model";
 import type { MatchState } from "@/lib/statements/types";
+
+const MODEL_VERSIONS = ["v0", "v1", "v3-lgbm", "v4-lgbm", "v4-logreg", "v41-logreg", "v42-logreg", "v43-logreg"] as const;
 
 const InputSchema = z.object({
   innings: z.union([z.literal(1), z.literal(2)]),
@@ -11,7 +13,7 @@ const InputSchema = z.object({
   balls: z.number().int().min(0).max(120),
   targetRuns: z.number().int().min(1).nullable().optional(),
   battingTeam: z.union([z.literal("A"), z.literal("B")]).optional().default("A"),
-  modelVersion: z.union([z.literal("v0"), z.literal("v1")]).optional().default("v1"),
+  modelVersion: z.enum(MODEL_VERSIONS).optional(),
 });
 
 export async function POST(req: Request) {
@@ -37,7 +39,8 @@ export async function POST(req: Request) {
   const { modelVersion, ...stateData } = parsed.data;
   const state: MatchState = stateData as MatchState;
 
-  const result = computeWinProb(state, modelVersion);
+  // Use env-configured default if caller didn't specify a version
+  const result = computeWinProb(state, modelVersion ?? getDefaultModelVersion());
   return NextResponse.json(result);
 }
 
